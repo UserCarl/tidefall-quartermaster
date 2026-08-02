@@ -44,7 +44,7 @@ This helps provide accurate estimates even when market data is limited.
 ## Installation
 
 1. Install a userscript manager such as Tampermonkey: https://www.tampermonkey.net/
-2. Open `tidefall-quartermaster.user.js`
+2. Open `Tidefall_Quartermaster.user.js`
 3. Click **Raw** in the top-right corner.
 4. Click **Install**.
 5. Open or refresh Tidefall.
