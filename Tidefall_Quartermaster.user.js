@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tidefall Quartermaster
 // @namespace    tidefall-quartermaster
-// @version      1.0
+// @version      1.0.1
 // @description  Standalone Exchange reader and mastery-aware profit advisor for Tidefall
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=playtidefall.com
 // @updateURL    https://raw.githubusercontent.com/UserCarl/tidefall-quartermaster/main/Tidefall_Quartermaster.user.js
@@ -13,7 +13,7 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.0';
+    const VERSION = '1.0.1';
     const STORAGE_KEY = 'tf-quartermaster-v1';
     const BUTTON_ID = 'tf-quartermaster-button';
     const VENDOR_BUTTON_ID = 'tf-quartermaster-vendor-button';
@@ -7963,7 +7963,6 @@
                     <div class="tqm-best-port-badge">
                         <span>Version</span>
                         <strong>${VERSION}</strong>
-                        <small>${status.recipeCount} recipes · ${status.shipCount} ships</small>
                     </div>
                 </div>
 
