@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tidefall Quartermaster
 // @namespace    tidefall-quartermaster
-// @version      1.0.2
+// @version      1.0.7
 // @description  Standalone Exchange reader and mastery-aware profit advisor for Tidefall
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=playtidefall.com
 // @updateURL    https://raw.githubusercontent.com/UserCarl/tidefall-quartermaster/main/Tidefall_Quartermaster.user.js
@@ -13,7 +13,7 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.0.2';
+    const VERSION = '1.0.7';
     const STORAGE_KEY = 'tf-quartermaster-v1';
     const BUTTON_ID = 'tf-quartermaster-button';
     const VENDOR_BUTTON_ID = 'tf-quartermaster-vendor-button';
@@ -1037,12 +1037,27 @@
         }
 
         const skill = recipe.skill;
-        const currentLevel = Math.max(
+        const detectedLevel = Math.max(
             1,
             Number(state.skillLevels[skill] || recipe.level || 1)
         );
         const progress = state.skillProgress?.[skill] || {};
-        const currentXp = Math.max(0, Number(progress.currentXp || 0));
+        const detectedXp = Math.max(0, Number(progress.currentXp || 0));
+        const override = progressPlannerSessionOverrides[skill] || {};
+        const currentLevel = Math.max(
+            1,
+            Math.min(
+                200,
+                Math.floor(Number(override.currentLevel ?? detectedLevel) || detectedLevel)
+            )
+        );
+        const currentXp = Math.max(
+            0,
+            Math.min(
+                Math.max(0, xpRequiredForLevel(currentLevel) - 1),
+                Math.floor(Number(override.currentXp ?? detectedXp) || 0)
+            )
+        );
         const targetLevel = Math.max(
             currentLevel + 1,
             Math.floor(
@@ -1269,8 +1284,12 @@
                     recipe.skill,
                     baseXp
                 );
-                const xpPerHour = recipe.cycle > 0
-                    ? xp * 3600 / recipe.cycle
+                const adjustedCycle = adjustedCraftTime(
+                    recipe.cycle,
+                    recipe.skill
+                );
+                const xpPerHour = adjustedCycle > 0
+                    ? xp * 3600 / adjustedCycle
                     : 0;
 
                 return {
@@ -1468,6 +1487,7 @@
     }
 
     let state = loadState();
+    let progressPlannerSessionOverrides = {};
 
     if (state.craftingPlanner?.selectedGroup === 'Ammunition') {
         state.craftingPlanner.selectedGroup = 'Smithing';
@@ -1585,8 +1605,56 @@
             .filter(city => city !== 'None');
 
         /*
-         * Tidefall keeps the current port name in the left sidebar while
-         * docked, even when the city panel is closed.
+         * Tidefall exposes the current docked city in the persistent ship
+         * context line, for example: "Caelthar Reach · Docked".
+         */
+        const shipContextLine = document.querySelector('#cs-context-line');
+        const shipContextText = normalizeName(
+            shipContextLine?.textContent || ''
+        );
+
+        if (/\bDocked\b/i.test(shipContextText)) {
+            const matchedContextCity = knownCities.find(city =>
+                new RegExp(
+                    `^${city.replace(/\s+/g, '\\s+')}\s*·\s*Docked$`,
+                    'i'
+                ).test(shipContextText)
+            );
+
+            if (matchedContextCity) {
+                return matchedContextCity;
+            }
+        }
+
+        /*
+         * Fallback for older Tidefall layouts where the context line was not
+         * directly available.
+         */
+        const activeTaskPanel = document.querySelector('#active-task-panel');
+        let shipStatusContainer = activeTaskPanel?.parentElement || null;
+
+        for (let depth = 0; shipStatusContainer && depth < 7; depth += 1) {
+            const statusText = normalizeName(shipStatusContainer.innerText);
+
+            if (/\bDOCKED\b/i.test(statusText)) {
+                const matchedShipCity = knownCities.find(city =>
+                    new RegExp(
+                        `\\b${city.replace(/\s+/g, '\\s+')}\\b`,
+                        'i'
+                    ).test(statusText)
+                );
+
+                if (matchedShipCity) {
+                    return matchedShipCity;
+                }
+            }
+
+            shipStatusContainer = shipStatusContainer.parentElement;
+        }
+
+        /*
+         * Tidefall may also keep the current port name in the left sidebar
+         * while docked, even when the city panel is closed.
          */
         const sidebarCityLabel =
             document.querySelector(
@@ -1684,7 +1752,17 @@
         );
 
         if (select) {
-            select.value = detected;
+            select.value = state.manualCityOverride
+                ? detected
+                : '__auto__';
+
+            const autoOption = select.querySelector(
+                'option[value="__auto__"]'
+            );
+
+            if (autoOption && !state.manualCityOverride) {
+                autoOption.textContent = `Auto Detect · ${detected}`;
+            }
         }
 
         return true;
@@ -1703,7 +1781,7 @@
         const bonus = Number(CITY_BONUSES[city]?.[skill] || 0);
 
         return base > 0
-            ? base / (1 + bonus)
+            ? base * Math.max(0, 1 - bonus)
             : 0;
     }
 
@@ -5691,6 +5769,9 @@
         const plan = calculateProgressPlan();
         const selectedSkill = plan?.skill || 'smelting';
         const selectedRecipe = plan?.recipe || null;
+        const hasProgressOverride = Boolean(
+            progressPlannerSessionOverrides[selectedSkill]
+        );
         const skillRecipes = rows
             .filter(row => row.skill === selectedSkill)
             .sort((a, b) =>
@@ -5781,18 +5862,39 @@
 
                     <label>
                         <span>Current Level</span>
-                        <input type="number" value="${plan?.currentLevel || 1}" disabled>
+                        <input
+                            id="tqm-progress-current-level"
+                            type="number"
+                            min="1"
+                            max="200"
+                            step="1"
+                            value="${plan?.currentLevel || 1}"
+                        >
                     </label>
 
                     <label>
                         <span>Current XP</span>
-                        <input
-                            id="tqm-progress-current-xp"
-                            type="number"
-                            min="0"
-                            step="1"
-                            value="${plan?.currentXp || 0}"
-                        >
+                        <div class="tqm-progress-input-inline">
+                            <input
+                                id="tqm-progress-current-xp"
+                                type="number"
+                                min="0"
+                                max="${Math.max(0, xpRequiredForLevel(plan?.currentLevel || 1) - 1)}"
+                                step="1"
+                                value="${plan?.currentXp || 0}"
+                            >
+                            ${hasProgressOverride ? `
+                                <button
+                                    class="tqm-progress-restore"
+                                    id="tqm-progress-use-detected"
+                                    type="button"
+                                    title="Restore detected level and XP"
+                                    aria-label="Restore detected level and XP"
+                                >
+                                    ↺ Restore
+                                </button>
+                            ` : ''}
+                        </div>
                     </label>
 
                     <label>
@@ -8866,9 +8968,10 @@
             'change',
             event => {
                 const recipe = selectedProgressRecipe();
+                const plan = calculateProgressPlan();
                 const currentLevel = Math.max(
                     1,
-                    Number(state.skillLevels[recipe?.skill] || 1)
+                    Number(plan?.currentLevel || state.skillLevels[recipe?.skill] || 1)
                 );
 
                 state.progressPlanner = {
@@ -8883,22 +8986,69 @@
             }
         );
 
+        document.querySelector('#tqm-progress-current-level')?.addEventListener(
+            'change',
+            event => {
+                const recipe = selectedProgressRecipe();
+                if (!recipe) return;
+
+                const currentLevel = Math.max(
+                    1,
+                    Math.min(200, Math.floor(Number(event.target.value) || 1))
+                );
+                const existing = progressPlannerSessionOverrides[recipe.skill] || {};
+                const detectedXp = Math.max(
+                    0,
+                    Number(state.skillProgress?.[recipe.skill]?.currentXp || 0)
+                );
+                const currentXp = Math.min(
+                    Math.max(0, xpRequiredForLevel(currentLevel) - 1),
+                    Math.max(0, Number(existing.currentXp ?? detectedXp) || 0)
+                );
+
+                progressPlannerSessionOverrides[recipe.skill] = {
+                    ...existing,
+                    currentLevel,
+                    currentXp
+                };
+                renderActiveTab('xp');
+            }
+        );
+
         document.querySelector('#tqm-progress-current-xp')?.addEventListener(
             'change',
             event => {
                 const recipe = selectedProgressRecipe();
                 if (!recipe) return;
 
-                state.skillProgress[recipe.skill] = {
-                    ...(state.skillProgress[recipe.skill] || {}),
-                    currentXp: Math.max(0, Math.floor(Number(event.target.value) || 0)),
-                    requiredXp: xpRequiredForLevel(
-                        Number(state.skillLevels[recipe.skill] || 1)
-                    ),
-                    updatedAt: Date.now()
+                const plan = calculateProgressPlan();
+                const currentLevel = Math.max(1, Number(plan?.currentLevel || 1));
+                const currentXp = Math.max(
+                    0,
+                    Math.min(
+                        Math.max(0, xpRequiredForLevel(currentLevel) - 1),
+                        Math.floor(Number(event.target.value) || 0)
+                    )
+                );
+
+                progressPlannerSessionOverrides[recipe.skill] = {
+                    ...(progressPlannerSessionOverrides[recipe.skill] || {}),
+                    currentLevel,
+                    currentXp
                 };
-                saveState();
                 renderActiveTab('xp');
+            }
+        );
+
+        document.querySelector('#tqm-progress-use-detected')?.addEventListener(
+            'click',
+            () => {
+                const recipe = selectedProgressRecipe();
+                if (!recipe) return;
+
+                delete progressPlannerSessionOverrides[recipe.skill];
+                renderActiveTab('xp');
+                showToast('Detected level and XP restored.');
             }
         );
 
@@ -9600,7 +9750,7 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
                             <span>Current City</span>
                             <select
                                 id="tqm-header-city-select"
-                                title="Selecting a city keeps that manual choice."
+                                title="Detected from Tidefall when Quartermaster opens. Manual changes last until Quartermaster is reopened."
                             >
                                 ${Object.keys(CITY_BONUSES).map(city => `
                                     <option value="${escapeHtml(city)}" ${state.currentCity === city ? 'selected' : ''}>
@@ -9634,7 +9784,7 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
                             <button id="tqm-scan-now" class="tqm-action tqm-compact">Read Exchange</button>
                             <small>Exchange market table must be open.</small>
                         </div>
-                        <button id="tqm-close" class="tqm-close" title="Close">×</button>
+                        <button id="tqm-close" class="tqm-close" title="Close" aria-label="Close">×</button>
                     </div>
                 </header>
 
@@ -9675,8 +9825,11 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
         overlay.querySelector('#tqm-header-city-select').addEventListener('change', event => {
             state.currentCity = event.target.value;
             state.manualCityOverride = true;
-            saveState();
-            showToast(`City locked to ${state.currentCity}.`);
+
+            showToast(
+                `Using ${state.currentCity} until Quartermaster is reopened.`
+            );
+
             renderActiveTab(
                 overlay.querySelector('[data-tqm-tab].tqm-active')?.dataset.tqmTab || 'overview'
             );
@@ -9703,7 +9856,16 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
     }
 
     function openOverlay() {
-        autoDetectCurrentCity();
+        progressPlannerSessionOverrides = {};
+        const detectedCity = detectCurrentCityFromPage();
+
+        if (detectedCity) {
+            state.currentCity = detectedCity;
+        }
+
+        state.manualCityOverride = false;
+        saveState();
+
         scanMasteryFromPage();
         scanSkillLevelsFromPage();
         scanXpRecipesFromPage();
@@ -9711,6 +9873,12 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
         scanVisibleExchange();
 
         const overlay = document.getElementById(OVERLAY_ID);
+        const citySelect = overlay.querySelector('#tqm-header-city-select');
+
+        if (citySelect) {
+            citySelect.value = state.currentCity;
+        }
+
         overlay.classList.add('tqm-open');
         document.documentElement.classList.add('tqm-lock-scroll');
 
@@ -11838,18 +12006,30 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
 
         .tqm-header-actions {
             display: flex;
-            align-items: center;
+            align-items: flex-start;
             gap: 10px;
+        }
+
+        .tqm-header-actions > .tqm-action,
+        .tqm-read-exchange-wrap > .tqm-action,
+        .tqm-close {
+            min-height: 38px;
+            box-sizing: border-box;
         }
 
         .tqm-close {
             width: 38px;
             height: 38px;
-            color: rgba(255, 255, 255, .68);
-            background: rgba(255, 255, 255, .04);
-            border: 1px solid rgba(255, 255, 255, .14);
-            border-radius: 50%;
-            font-size: 24px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 0;
+            color: #c5a059;
+            background: rgba(197, 160, 89, .08);
+            border: 1px solid rgba(197, 160, 89, .42);
+            border-radius: 5px;
+            font-size: 22px;
+            line-height: 1;
             cursor: pointer;
         }
 
@@ -12055,6 +12235,39 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
             border-radius: 5px;
             background: #111417;
             color: #f2eee4;
+        }
+
+        .tqm-progress-input-inline {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            min-width: 0;
+        }
+
+        .tqm-progress-input-inline input {
+            min-width: 0;
+        }
+
+        .tqm-progress-restore {
+            flex: 0 0 auto;
+            min-height: 38px;
+            padding: 7px 10px;
+            color: #c5a059;
+            background: rgba(197, 160, 89, .08);
+            border: 1px solid rgba(197, 160, 89, .42);
+            border-radius: 5px;
+            font: inherit;
+            font-size: 10px;
+            font-weight: 800;
+            letter-spacing: .04em;
+            text-transform: uppercase;
+            white-space: nowrap;
+            cursor: pointer;
+        }
+
+        .tqm-progress-restore:hover {
+            background: rgba(197, 160, 89, .14);
+            border-color: rgba(224, 186, 107, .72);
         }
 
         .tqm-progress-summary {
@@ -12459,6 +12672,7 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
 
         .tqm-action.tqm-compact {
             width: auto;
+            min-height: 38px;
             padding: 8px 12px;
         }
 
