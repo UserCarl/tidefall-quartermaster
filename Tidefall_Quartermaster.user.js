@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tidefall Quartermaster
 // @namespace    tidefall-quartermaster
-// @version      1.0.1
+// @version      1.0.2
 // @description  Standalone Exchange reader and mastery-aware profit advisor for Tidefall
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=playtidefall.com
 // @updateURL    https://raw.githubusercontent.com/UserCarl/tidefall-quartermaster/main/Tidefall_Quartermaster.user.js
@@ -13,7 +13,7 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.0.1';
+    const VERSION = '1.0.2';
     const STORAGE_KEY = 'tf-quartermaster-v1';
     const BUTTON_ID = 'tf-quartermaster-button';
     const VENDOR_BUTTON_ID = 'tf-quartermaster-vendor-button';
@@ -23,6 +23,9 @@
     const MARKET_PARSER_VERSION = 2;
     const EXCLUDE_DEFAULT_MIGRATION_KEY =
         'tf-quartermaster-exclude-default-v1';
+    const JOURNAL_ID = 'tf-quartermaster-journal';
+    const JOURNAL_STORAGE_KEY = 'tf-quartermaster-journal-v1';
+    const JOURNAL_MAX_LENGTH = 500;
 
     function formatGold(value, { allowZero = false } = {}) {
         const amount = Number(value);
@@ -9344,6 +9347,241 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
         }, 2800);
     }
 
+
+    function loadJournalState() {
+        const defaults = {
+            text: '',
+            left: Math.max(20, window.innerWidth - 410),
+            top: 110,
+            width: 360,
+            height: 280,
+            minimized: false,
+            open: false
+        };
+
+        try {
+            const saved = JSON.parse(
+                localStorage.getItem(JOURNAL_STORAGE_KEY) || '{}'
+            );
+
+            return {
+                ...defaults,
+                ...saved,
+                text: String(saved.text || '').slice(0, JOURNAL_MAX_LENGTH)
+            };
+        } catch {
+            return defaults;
+        }
+    }
+
+    let journalState = loadJournalState();
+
+    function saveJournalState() {
+        localStorage.setItem(
+            JOURNAL_STORAGE_KEY,
+            JSON.stringify(journalState)
+        );
+    }
+
+    function clampJournalPosition(panel) {
+        const margin = 8;
+        const rect = panel.getBoundingClientRect();
+        const maxLeft = Math.max(margin, window.innerWidth - rect.width - margin);
+        const maxTop = Math.max(margin, window.innerHeight - 48);
+
+        journalState.left = Math.min(
+            Math.max(margin, Number(journalState.left) || margin),
+            maxLeft
+        );
+        journalState.top = Math.min(
+            Math.max(margin, Number(journalState.top) || margin),
+            maxTop
+        );
+
+        panel.style.left = `${journalState.left}px`;
+        panel.style.top = `${journalState.top}px`;
+    }
+
+    function updateJournalCounter(panel) {
+        const textarea = panel.querySelector('#tqm-journal-text');
+        const counter = panel.querySelector('#tqm-journal-counter');
+
+        if (textarea && counter) {
+            counter.textContent = `${textarea.value.length} / ${JOURNAL_MAX_LENGTH}`;
+        }
+    }
+
+    function applyJournalState(panel) {
+        panel.classList.toggle('tqm-journal-minimized', journalState.minimized);
+        panel.classList.toggle('tqm-journal-open', journalState.open);
+        panel.style.width = `${Math.max(280, Number(journalState.width) || 360)}px`;
+        panel.style.height = journalState.minimized
+            ? '44px'
+            : `${Math.max(180, Number(journalState.height) || 280)}px`;
+        clampJournalPosition(panel);
+
+        const minimizeButton = panel.querySelector('#tqm-journal-minimize');
+        if (minimizeButton) {
+            minimizeButton.textContent = journalState.minimized ? '□' : '−';
+            minimizeButton.title = journalState.minimized ? 'Restore' : 'Minimize';
+        }
+    }
+
+    function createJournal() {
+        let panel = document.getElementById(JOURNAL_ID);
+        if (panel) return panel;
+
+        panel = document.createElement('aside');
+        panel.id = JOURNAL_ID;
+        panel.innerHTML = `
+            <div class="tqm-journal-header" id="tqm-journal-drag">
+                <div>
+                    <span>Captain's Journal</span>
+                    <small>Personal notes saved in this browser</small>
+                </div>
+
+                <div class="tqm-journal-actions">
+                    <button
+                        id="tqm-journal-minimize"
+                        type="button"
+                        aria-label="Minimize journal"
+                        title="Minimize"
+                    >−</button>
+                    <button
+                        id="tqm-journal-close"
+                        type="button"
+                        aria-label="Close journal"
+                        title="Close"
+                    >×</button>
+                </div>
+            </div>
+
+            <div class="tqm-journal-body">
+                <textarea
+                    id="tqm-journal-text"
+                    maxlength="${JOURNAL_MAX_LENGTH}"
+                    spellcheck="true"
+                    placeholder="After crafting finishes, mine mithril, make nails, then craft repair kits..."
+                ></textarea>
+
+                <div class="tqm-journal-footer">
+                    <span>Autosaved locally</span>
+                    <strong id="tqm-journal-counter">0 / ${JOURNAL_MAX_LENGTH}</strong>
+                </div>
+            </div>
+        `;
+
+        document.body.appendChild(panel);
+
+        const textarea = panel.querySelector('#tqm-journal-text');
+        textarea.value = journalState.text;
+        updateJournalCounter(panel);
+        applyJournalState(panel);
+
+        textarea.addEventListener('input', () => {
+            journalState.text = textarea.value.slice(0, JOURNAL_MAX_LENGTH);
+            updateJournalCounter(panel);
+            saveJournalState();
+        });
+
+        panel.querySelector('#tqm-journal-minimize').addEventListener('click', event => {
+            event.stopPropagation();
+
+            if (!journalState.minimized) {
+                const rect = panel.getBoundingClientRect();
+                journalState.width = rect.width;
+                journalState.height = rect.height;
+            }
+
+            journalState.minimized = !journalState.minimized;
+            applyJournalState(panel);
+            saveJournalState();
+        });
+
+        panel.querySelector('#tqm-journal-close').addEventListener('click', event => {
+            event.stopPropagation();
+            journalState.open = false;
+            panel.classList.remove('tqm-journal-open');
+            saveJournalState();
+        });
+
+        const dragHandle = panel.querySelector('#tqm-journal-drag');
+        let dragging = false;
+        let offsetX = 0;
+        let offsetY = 0;
+
+        dragHandle.addEventListener('pointerdown', event => {
+            if (event.target.closest('button')) return;
+
+            const rect = panel.getBoundingClientRect();
+            dragging = true;
+            offsetX = event.clientX - rect.left;
+            offsetY = event.clientY - rect.top;
+            dragHandle.setPointerCapture(event.pointerId);
+            panel.classList.add('tqm-journal-dragging');
+            event.preventDefault();
+        });
+
+        dragHandle.addEventListener('pointermove', event => {
+            if (!dragging) return;
+
+            journalState.left = event.clientX - offsetX;
+            journalState.top = event.clientY - offsetY;
+            clampJournalPosition(panel);
+        });
+
+        const finishDrag = event => {
+            if (!dragging) return;
+            dragging = false;
+            panel.classList.remove('tqm-journal-dragging');
+
+            if (dragHandle.hasPointerCapture(event.pointerId)) {
+                dragHandle.releasePointerCapture(event.pointerId);
+            }
+
+            saveJournalState();
+        };
+
+        dragHandle.addEventListener('pointerup', finishDrag);
+        dragHandle.addEventListener('pointercancel', finishDrag);
+
+        if ('ResizeObserver' in window) {
+            let resizeTimer = 0;
+            const resizeObserver = new ResizeObserver(() => {
+                if (journalState.minimized) return;
+                window.clearTimeout(resizeTimer);
+                resizeTimer = window.setTimeout(() => {
+                    const rect = panel.getBoundingClientRect();
+                    journalState.width = Math.round(rect.width);
+                    journalState.height = Math.round(rect.height);
+                    clampJournalPosition(panel);
+                    saveJournalState();
+                }, 100);
+            });
+            resizeObserver.observe(panel);
+        }
+
+        window.addEventListener('resize', () => {
+            clampJournalPosition(panel);
+            saveJournalState();
+        });
+
+        return panel;
+    }
+
+    function openJournal() {
+        const panel = createJournal();
+        journalState.open = true;
+        applyJournalState(panel);
+        saveJournalState();
+
+        if (!journalState.minimized) {
+            requestAnimationFrame(() => {
+                panel.querySelector('#tqm-journal-text')?.focus();
+            });
+        }
+    }
+
     function createOverlay() {
         if (document.getElementById(OVERLAY_ID)) return;
 
@@ -9391,6 +9629,7 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
                     </div>
 
                     <div class="tqm-header-actions">
+                        <button id="tqm-open-journal" class="tqm-action tqm-secondary tqm-compact">Journal</button>
                         <div class="tqm-read-exchange-wrap">
                             <button id="tqm-scan-now" class="tqm-action tqm-compact">Read Exchange</button>
                             <small>Exchange market table must be open.</small>
@@ -9424,6 +9663,7 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
         applyQuartermasterPreferences();
 
         overlay.querySelector('#tqm-close').addEventListener('click', closeOverlay);
+        overlay.querySelector('#tqm-open-journal').addEventListener('click', openJournal);
         overlay.addEventListener('click', event => {
             if (event.target === overlay) closeOverlay();
         });
@@ -10208,6 +10448,153 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
             font-size: 10px;
             font-weight: 700;
         }
+
+
+        #${JOURNAL_ID} {
+            position: fixed;
+            display: none;
+            flex-direction: column;
+            min-width: 280px;
+            min-height: 180px;
+            max-width: calc(100vw - 16px);
+            max-height: calc(100vh - 16px);
+            z-index: 2147483645;
+            overflow: hidden;
+            resize: both;
+            border: 1px solid rgba(186, 145, 69, 0.62);
+            border-radius: 10px;
+            background:
+                linear-gradient(180deg, rgba(29, 36, 44, 0.98), rgba(15, 21, 27, 0.98));
+            color: #f1eadc;
+            box-shadow: 0 16px 45px rgba(0, 0, 0, 0.52);
+            font-family: inherit;
+        }
+
+        #${JOURNAL_ID}.tqm-journal-open {
+            display: flex;
+        }
+
+        #${JOURNAL_ID}.tqm-journal-minimized {
+            min-height: 44px;
+            max-height: 44px;
+            resize: none;
+        }
+
+        #${JOURNAL_ID}.tqm-journal-dragging {
+            user-select: none;
+        }
+
+        .tqm-journal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            flex: 0 0 44px;
+            gap: 12px;
+            padding: 0 8px 0 13px;
+            border-bottom: 1px solid rgba(186, 145, 69, 0.25);
+            background: rgba(8, 13, 18, 0.78);
+            cursor: move;
+            touch-action: none;
+        }
+
+        .tqm-journal-header > div:first-child {
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            line-height: 1.15;
+        }
+
+        .tqm-journal-header span {
+            color: #e2bd72;
+            font-size: 14px;
+            font-weight: 800;
+            letter-spacing: 0.02em;
+        }
+
+        .tqm-journal-header small {
+            color: #9ca9b3;
+            font-size: 10px;
+            font-weight: 600;
+        }
+
+        .tqm-journal-actions {
+            display: flex;
+            gap: 4px;
+            flex: 0 0 auto;
+        }
+
+        .tqm-journal-actions button {
+            width: 29px;
+            height: 29px;
+            padding: 0;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 6px;
+            background: rgba(255, 255, 255, 0.05);
+            color: #f2eadc;
+            cursor: pointer;
+            font-size: 17px;
+            line-height: 1;
+        }
+
+        .tqm-journal-actions button:hover {
+            border-color: rgba(226, 189, 114, 0.65);
+            background: rgba(226, 189, 114, 0.12);
+        }
+
+        .tqm-journal-body {
+            display: flex;
+            flex: 1 1 auto;
+            min-height: 0;
+            flex-direction: column;
+            padding: 10px;
+        }
+
+        .tqm-journal-minimized .tqm-journal-body {
+            display: none;
+        }
+
+        #tqm-journal-text {
+            box-sizing: border-box;
+            width: 100%;
+            min-height: 0;
+            flex: 1 1 auto;
+            resize: none;
+            padding: 11px 12px;
+            border: 1px solid rgba(255, 255, 255, 0.12);
+            border-radius: 7px;
+            outline: none;
+            background: rgba(3, 8, 12, 0.62);
+            color: #f4efe6;
+            font: inherit;
+            font-size: 14px;
+            line-height: 1.45;
+        }
+
+        #tqm-journal-text:focus {
+            border-color: rgba(226, 189, 114, 0.68);
+            box-shadow: 0 0 0 2px rgba(226, 189, 114, 0.09);
+        }
+
+        #tqm-journal-text::placeholder {
+            color: #74818c;
+        }
+
+        .tqm-journal-footer {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 7px 2px 0;
+            color: #8f9aa3;
+            font-size: 10px;
+            font-weight: 700;
+        }
+
+        .tqm-journal-footer strong {
+            color: #c9b17c;
+            font-variant-numeric: tabular-nums;
+        }
+
 
         @media (max-width: 520px) {
             .tqm-ship-heading-actions {
@@ -12184,6 +12571,7 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
     document.head.appendChild(style);
 
     createHeaderButton();
+    createJournal();
 
     const headerObserver = new MutationObserver(() => {
         if (!document.getElementById(BUTTON_ID)) {
