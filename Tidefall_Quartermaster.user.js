@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tidefall Quartermaster
 // @namespace    tidefall-quartermaster
-// @version      1.0.7
+// @version      1.0.9
 // @description  Standalone Exchange reader and mastery-aware profit advisor for Tidefall
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=playtidefall.com
 // @updateURL    https://raw.githubusercontent.com/UserCarl/tidefall-quartermaster/main/Tidefall_Quartermaster.user.js
@@ -13,7 +13,7 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.0.7';
+    const VERSION = '1.0.9';
     const STORAGE_KEY = 'tf-quartermaster-v1';
     const BUTTON_ID = 'tf-quartermaster-button';
     const VENDOR_BUTTON_ID = 'tf-quartermaster-vendor-button';
@@ -3074,12 +3074,15 @@
             return {
                 netUnitValue: 0,
                 source: 'Unavailable',
+                ask: 0,
                 bid: 0,
                 vendorPrice: 0,
                 recentTradeMedian: 0
             };
         }
 
+        const marketAnalysis = analyzeMarketPrice(record);
+        const ask = Number(marketAnalysis.price || 0);
         const bid = Number(record.bid || 0);
         const vendorPrice = Number(
             record.vendorPrice ||
@@ -3092,30 +3095,40 @@
             0
         );
 
-        const bidNet = bid > 0 ? netPrice(bid) : 0;
+        const candidates = [
+            {
+                netUnitValue: ask > 0 ? netPrice(ask) : 0,
+                source: 'Exchange Listing'
+            },
+            {
+                netUnitValue: bid > 0 ? netPrice(bid) : 0,
+                source: 'Exchange Buy Order'
+            },
+            {
+                netUnitValue: vendorPrice,
+                source: 'Vendor'
+            }
+        ].filter(candidate => candidate.netUnitValue > 0);
 
-        if (bidNet > 0 || vendorPrice > 0) {
-            return bidNet >= vendorPrice
-                ? {
-                    netUnitValue: bidNet,
-                    source: 'Exchange Buy Order',
-                    bid,
-                    vendorPrice,
-                    recentTradeMedian
-                }
-                : {
-                    netUnitValue: vendorPrice,
-                    source: 'Vendor',
-                    bid,
-                    vendorPrice,
-                    recentTradeMedian
-                };
+        const best = candidates.sort(
+            (a, b) => b.netUnitValue - a.netUnitValue
+        )[0];
+
+        if (best) {
+            return {
+                ...best,
+                ask,
+                bid,
+                vendorPrice,
+                recentTradeMedian
+            };
         }
 
         if (recentTradeMedian > 0) {
             return {
                 netUnitValue: netPrice(recentTradeMedian),
                 source: 'Recent Trade Estimate',
+                ask,
                 bid,
                 vendorPrice,
                 recentTradeMedian
@@ -3125,6 +3138,7 @@
         return {
             netUnitValue: 0,
             source: 'Unavailable',
+            ask,
             bid,
             vendorPrice,
             recentTradeMedian
@@ -3142,7 +3156,8 @@
             value,
             source: sale.source,
             exchangeValue:
-                sale.source === 'Exchange Buy Order'
+                sale.source === 'Exchange Buy Order' ||
+                sale.source === 'Exchange Listing'
                     ? value
                     : NaN,
             vendorValue:
@@ -6619,6 +6634,32 @@
         `).join('');
     }
 
+    function craftProfitTooltip({
+        inputLabel,
+        inputCost,
+        outputLabel,
+        outputQuantity,
+        outputValue,
+        saleSource,
+        profit,
+        cycle
+    }) {
+        const lines = [
+            `Input: ${inputLabel} (${formatGold(inputCost, { allowZero: true })})`,
+            `Expected output: ${Number(outputQuantity || 0).toFixed(2).replace(/\.00$/, '')} ${outputLabel}`,
+            `Net output value: ${formatGold(outputValue, { allowZero: true })}`,
+            `Sell through: ${saleSource || 'N/A'}`,
+            `Profit: ${signedMoney(profit)}`,
+            `Cycle: ${formatSeconds(cycle)}`
+        ];
+
+        if (/^Exchange/i.test(String(saleSource || ''))) {
+            lines.splice(4, 0, `Exchange tax: ${state.taxPercent}%`);
+        }
+
+        return lines.join('\n');
+    }
+
     function renderWood() {
         const rows = calculateWoodRows();
 
@@ -6640,7 +6681,7 @@
                     <table class="tqm-table tqm-table-compact">
                         <thead>
                             <tr>
-                                <th>Resource</th>
+                                <th>Product</th>
                                 <th>Action</th>
                                 <th>Profit</th>
                                 <th>Profit/hr</th>
@@ -6653,14 +6694,23 @@
                                     <tr>
                                         <td>
                                             <strong>
-                                                ${escapeHtml(row.material)}
+                                                ${escapeHtml(`${row.material} Planks`)}
                                             </strong>
                                             <small class="tqm-level-note">
                                                 Lv. ${row.requiredLevel}
                                             </small>
                                         </td>
                                         <td>Log → Planks</td>
-                                        <td class="${
+                                        <td title="${escapeHtml(craftProfitTooltip({
+                                            inputLabel: `1 ${row.material} Log`,
+                                            inputCost: row.plankInputCost,
+                                            outputLabel: `${row.material} Planks`,
+                                            outputQuantity: yieldMultiplier('carpentry'),
+                                            outputValue: row.plankOutputValue,
+                                            saleSource: row.plankActionSale?.source,
+                                            profit: row.plankActionProfit,
+                                            cycle: row.plankChainTime
+                                        }))}" class="${
                                             Number.isFinite(
                                                 row.plankActionProfit
                                             )
@@ -6710,11 +6760,20 @@
                                     <tr>
                                         <td>
                                             <strong>
-                                                ${escapeHtml(row.material)}
+                                                ${escapeHtml(`${row.material} Beams`)}
                                             </strong>
                                         </td>
                                         <td>2 Planks → Beams</td>
-                                        <td class="${
+                                        <td title="${escapeHtml(craftProfitTooltip({
+                                            inputLabel: `2 ${row.material} Planks`,
+                                            inputCost: row.beamInputCost,
+                                            outputLabel: `${row.material} Beams`,
+                                            outputQuantity: yieldMultiplier('carpentry'),
+                                            outputValue: row.beamOutputValue,
+                                            saleSource: row.beamActionSale?.source,
+                                            profit: row.beamActionProfit,
+                                            cycle: row.beamChainTime
+                                        }))}" class="${
                                             Number.isFinite(
                                                 row.beamActionProfit
                                             )
