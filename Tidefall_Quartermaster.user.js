@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tidefall Quartermaster
 // @namespace    tidefall-quartermaster
-// @version      1.0.9
+// @version      1.0.10
 // @description  Standalone Exchange reader and mastery-aware profit advisor for Tidefall
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=playtidefall.com
 // @updateURL    https://raw.githubusercontent.com/UserCarl/tidefall-quartermaster/main/Tidefall_Quartermaster.user.js
@@ -13,7 +13,8 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.0.9';
+    const VERSION = '1.0.10';
+    const BUILD_ID = '2026-08-05-official';
     const STORAGE_KEY = 'tf-quartermaster-v1';
     const BUTTON_ID = 'tf-quartermaster-button';
     const VENDOR_BUTTON_ID = 'tf-quartermaster-vendor-button';
@@ -107,6 +108,7 @@
                 planks: 0,
                 beams: 0
             },
+            manualInventoryOverride: false,
             inventoryPanelOpen: false,
             inventoryPanelPosition: {
                 left: 80,
@@ -1030,16 +1032,16 @@
     }
 
     function calculateProgressPlan() {
-        const recipe = selectedProgressRecipe();
+        const selectedRecipe = selectedProgressRecipe();
 
-        if (!recipe) {
+        if (!selectedRecipe) {
             return null;
         }
 
-        const skill = recipe.skill;
+        const skill = selectedRecipe.skill;
         const detectedLevel = Math.max(
             1,
-            Number(state.skillLevels[skill] || recipe.level || 1)
+            Number(state.skillLevels[skill] || selectedRecipe.level || 1)
         );
         const progress = state.skillProgress?.[skill] || {};
         const detectedXp = Math.max(0, Number(progress.currentXp || 0));
@@ -1048,7 +1050,10 @@
             1,
             Math.min(
                 200,
-                Math.floor(Number(override.currentLevel ?? detectedLevel) || detectedLevel)
+                Math.floor(
+                    Number(override.currentLevel ?? detectedLevel) ||
+                    detectedLevel
+                )
             )
         );
         const currentXp = Math.max(
@@ -1060,25 +1065,172 @@
         );
         const targetLevel = Math.max(
             currentLevel + 1,
-            Math.floor(
-                Number(state.progressPlanner?.targetLevel) ||
-                currentLevel + 1
+            Math.min(
+                200,
+                Math.floor(
+                    Number(state.progressPlanner?.targetLevel) ||
+                    currentLevel + 1
+                )
             )
         );
-        const xpNeeded = xpNeededToReachLevel(
-            currentLevel,
-            currentXp,
-            targetLevel
-        );
-        const actions = Math.ceil(xpNeeded / recipe.xp);
-        const cycle = adjustedCraftTime(recipe.cycle, recipe.skill);
-        const totalSeconds = actions * cycle;
-        const directIngredients = (recipe.ingredients || []).map(
-            ingredient => ({
-                name: ingredient.name,
-                quantity: actions * Number(ingredient.quantity || 0)
-            })
-        );
+        const skillRecipes = calculateXpRows()
+            .filter(recipe => recipe.skill === skill)
+            .sort((a, b) =>
+                Number(a.level || 0) - Number(b.level || 0) ||
+                Number(b.xpPerHour || 0) - Number(a.xpPerHour || 0) ||
+                String(a.item).localeCompare(String(b.item))
+            );
+        const bestUnlockedRecipe = level => {
+            return [...skillRecipes]
+                .filter(recipe => Number(recipe.level || 1) <= level)
+                .sort((a, b) =>
+                    Number(b.xpPerHour || 0) -
+                        Number(a.xpPerHour || 0) ||
+                    Number(b.xp || 0) - Number(a.xp || 0) ||
+                    String(a.item).localeCompare(String(b.item))
+                )[0] || skillRecipes[0] || selectedRecipe;
+        };
+
+        const stages = [];
+        let simulatedLevel = currentLevel;
+        let simulatedXp = currentXp;
+        let guard = 0;
+
+        while (simulatedLevel < targetLevel && guard < 100) {
+            guard += 1;
+
+            const selectedUnlocked =
+                Number(selectedRecipe.level || 1) <= simulatedLevel;
+            const stageRecipe = selectedUnlocked
+                ? selectedRecipe
+                : bestUnlockedRecipe(simulatedLevel);
+            let stageTarget = selectedUnlocked
+                ? targetLevel
+                : Math.min(
+                    targetLevel,
+                    Number(selectedRecipe.level || targetLevel)
+                );
+
+            if (!selectedUnlocked) {
+                const nextUnlock = skillRecipes
+                    .map(recipe => Number(recipe.level || 1))
+                    .filter(level =>
+                        level > simulatedLevel && level < stageTarget
+                    )
+                    .sort((a, b) => a - b)[0];
+
+                if (nextUnlock) {
+                    stageTarget = nextUnlock;
+                }
+            }
+
+            if (stageTarget <= simulatedLevel) {
+                stageTarget = Math.min(targetLevel, simulatedLevel + 1);
+            }
+
+            const stageXpNeeded = xpNeededToReachLevel(
+                simulatedLevel,
+                simulatedXp,
+                stageTarget
+            );
+            const stageXp = Math.max(1, Number(stageRecipe.xp || 0));
+            const actions = Math.max(1, Math.ceil(stageXpNeeded / stageXp));
+            const cycle = adjustedCraftTime(
+                stageRecipe.cycle,
+                stageRecipe.skill
+            );
+            const startLevel = simulatedLevel;
+            const startXp = simulatedXp;
+            const projected = projectLevelFromXp(
+                simulatedLevel,
+                simulatedXp,
+                actions * stageXp
+            );
+            const directIngredients = (stageRecipe.ingredients || []).map(
+                ingredient => ({
+                    name: ingredient.name,
+                    quantity:
+                        actions * Number(ingredient.quantity || 0)
+                })
+            );
+
+            stages.push({
+                recipe: stageRecipe,
+                startLevel,
+                startXp,
+                targetLevel: stageTarget,
+                endLevel: Math.min(targetLevel, projected.level),
+                endXp: projected.xp,
+                xpNeeded: stageXpNeeded,
+                actions,
+                cycle,
+                totalSeconds: actions * cycle,
+                directIngredients,
+                isSelectedRecipe:
+                    xpRecipeKey(stageRecipe.skill, stageRecipe.item) ===
+                    xpRecipeKey(
+                        selectedRecipe.skill,
+                        selectedRecipe.item
+                    )
+            });
+
+            simulatedLevel = projected.level;
+            simulatedXp = projected.xp;
+        }
+
+        const mergedStages = [];
+        stages.forEach(stage => {
+            const previous = mergedStages[mergedStages.length - 1];
+            const sameRecipe = previous &&
+                xpRecipeKey(previous.recipe.skill, previous.recipe.item) ===
+                xpRecipeKey(stage.recipe.skill, stage.recipe.item);
+
+            if (!sameRecipe) {
+                mergedStages.push({
+                    ...stage,
+                    directIngredients: stage.directIngredients.map(
+                        ingredient => ({ ...ingredient })
+                    )
+                });
+                return;
+            }
+
+            previous.targetLevel = stage.targetLevel;
+            previous.endLevel = stage.endLevel;
+            previous.endXp = stage.endXp;
+            previous.xpNeeded += stage.xpNeeded;
+            previous.actions += stage.actions;
+            previous.totalSeconds += stage.totalSeconds;
+            previous.isSelectedRecipe =
+                previous.isSelectedRecipe || stage.isSelectedRecipe;
+
+            stage.directIngredients.forEach(ingredient => {
+                const existing = previous.directIngredients.find(item =>
+                    normalizeName(item.name).toLowerCase() ===
+                    normalizeName(ingredient.name).toLowerCase()
+                );
+
+                if (existing) {
+                    existing.quantity += ingredient.quantity;
+                } else {
+                    previous.directIngredients.push({ ...ingredient });
+                }
+            });
+        });
+
+        const directIngredientMap = new Map();
+        mergedStages.forEach(stage => {
+            stage.directIngredients.forEach(ingredient => {
+                const key = normalizeName(ingredient.name).toLowerCase();
+                const existing = directIngredientMap.get(key) || {
+                    name: normalizeName(ingredient.name),
+                    quantity: 0
+                };
+                existing.quantity += Number(ingredient.quantity || 0);
+                directIngredientMap.set(key, existing);
+            });
+        });
+        const directIngredients = [...directIngredientMap.values()];
         const baseMaterials = {};
 
         directIngredients.forEach(ingredient => {
@@ -1093,18 +1245,102 @@
             });
         });
 
+        const gatheringSkills = new Set([
+            'logging',
+            'mining',
+            'fishing'
+        ]);
+        const gatheringPlan = directIngredients
+            .map(ingredient => {
+                const gatheringRecipe = skillRecipes.length
+                    ? calculateXpRows().find(recipe =>
+                        gatheringSkills.has(recipe.skill) &&
+                        normalizeName(recipe.item).toLowerCase() ===
+                        normalizeName(ingredient.name).toLowerCase()
+                    )
+                    : null;
+
+                if (!gatheringRecipe) return null;
+
+                const yieldPerAction = yieldMultiplier(
+                    gatheringRecipe.skill
+                );
+                const actions = Math.ceil(
+                    Number(ingredient.quantity || 0) /
+                    Math.max(0.0001, yieldPerAction)
+                );
+                const cycle = adjustedCraftTime(
+                    gatheringRecipe.cycle,
+                    gatheringRecipe.skill
+                );
+                const inputs = (gatheringRecipe.ingredients || []).map(
+                    input => ({
+                        name: input.name,
+                        quantity:
+                            actions * Number(input.quantity || 0)
+                    })
+                );
+
+                return {
+                    item: ingredient.name,
+                    skill: gatheringRecipe.skill,
+                    requiredQuantity: ingredient.quantity,
+                    yieldPerAction,
+                    actions,
+                    cycle,
+                    totalSeconds: actions * cycle,
+                    inputs
+                };
+            })
+            .filter(Boolean);
+
+        const xpNeeded = xpNeededToReachLevel(
+            currentLevel,
+            currentXp,
+            targetLevel
+        );
+        const actions = mergedStages.reduce(
+            (total, stage) => total + stage.actions,
+            0
+        );
+        const totalSeconds = mergedStages.reduce(
+            (total, stage) => total + stage.totalSeconds,
+            0
+        );
+        const gatheringSeconds = gatheringPlan.reduce(
+            (total, entry) => total + entry.totalSeconds,
+            0
+        );
+        const combinedSeconds = totalSeconds + gatheringSeconds;
+        const selectedUsed = mergedStages.some(stage =>
+            stage.isSelectedRecipe
+        );
+
         return {
-            recipe,
+            recipe: selectedRecipe,
             skill,
             currentLevel,
             currentXp,
             targetLevel,
             xpNeeded,
             actions,
-            cycle,
+            cycle: adjustedCraftTime(
+                selectedRecipe.cycle,
+                selectedRecipe.skill
+            ),
             totalSeconds,
+            gatheringSeconds,
+            combinedSeconds,
             directIngredients,
-            baseMaterials
+            baseMaterials,
+            gatheringPlan,
+            stages: mergedStages,
+            staged:
+                mergedStages.length > 1 ||
+                !selectedUsed ||
+                Number(selectedRecipe.level || 1) > currentLevel,
+            selectedUsed,
+            selectedUnlockLevel: Number(selectedRecipe.level || 1)
         };
     }
 
@@ -1835,6 +2071,27 @@
         if (hours > 0) parts.push(`${hours}h`);
         if (minutes > 0) parts.push(`${minutes}m`);
         if (secs > 0 || parts.length === 0) parts.push(`${secs}s`);
+
+        return parts.join(' ');
+    }
+
+    function formatCycleSeconds(seconds) {
+        const total = Number(seconds);
+        if (!Number.isFinite(total) || total <= 0) return '—';
+
+        let remaining = Math.round(total * 10) / 10;
+        const hours = Math.floor(remaining / 3600);
+        remaining -= hours * 3600;
+        const minutes = Math.floor(remaining / 60);
+        remaining -= minutes * 60;
+        const secs = Math.round(remaining * 10) / 10;
+        const parts = [];
+
+        if (hours > 0) parts.push(`${hours}h`);
+        if (minutes > 0) parts.push(`${minutes}m`);
+        if (secs > 0 || parts.length === 0) {
+            parts.push(`${secs.toFixed(1)}s`);
+        }
 
         return parts.join(' ');
     }
@@ -2992,7 +3249,7 @@
         if (ask > 0 && !askRejected) {
             return {
                 price: ask,
-                source: 'Lowest Sell',
+                source: 'Exchange Listing',
                 askRejected: false,
                 bidIgnored: bid > 0,
                 reference
@@ -3022,7 +3279,7 @@
                 ? marketPrice * count
                 : NaN,
             source: marketPrice > 0
-                ? 'Lowest Sell'
+                ? 'Exchange Listing'
                 : 'Unavailable',
             marketPrice,
             marketSource: marketAnalysis.source,
@@ -3038,7 +3295,7 @@
         if (Number.isFinite(purchase.value) && purchase.value > 0) {
             return {
                 ...purchase,
-                source: 'Lowest Sell'
+                source: 'Exchange Listing'
             };
         }
 
@@ -3095,11 +3352,12 @@
             0
         );
 
+        /*
+         * Recommendation values represent immediate, dependable liquidation.
+         * A sell listing is not guaranteed to fill, so use the highest active
+         * buy order after tax, with vendor value as the fallback.
+         */
         const candidates = [
-            {
-                netUnitValue: ask > 0 ? netPrice(ask) : 0,
-                source: 'Exchange Listing'
-            },
             {
                 netUnitValue: bid > 0 ? netPrice(bid) : 0,
                 source: 'Exchange Buy Order'
@@ -3198,7 +3456,7 @@
             const planksPerLog = carpentry;
             const beamsPerLog = (planksPerLog / 2) * carpentry;
 
-            const logSale = exchangeBuyCost(logRecord, 1);
+            const logSale = bestAvailableSaleValue(logRecord, 1);
             const plankSale = bestSaleValue(plankRecord, planksPerLog);
             const beamSale = bestSaleValue(beamRecord, beamsPerLog);
 
@@ -3254,9 +3512,16 @@
              * Incremental action-profit model:
              * - Plank action consumes one log.
              * - Beam action consumes two planks.
-             * Each output is valued at its net Exchange listing value.
+             * Inputs and outputs use immediate sale value: the best active
+             * Exchange buy order after tax, or vendor value as fallback.
              */
-            const plankInput = resolveCraftInputCost(
+            /*
+             * Wood-tab action profit measures the value added by crafting
+             * materials already owned. Value the consumed input by what it
+             * could be sold for immediately, not by a potentially misleading
+             * lowest sell listing.
+             */
+            const plankInput = bestAvailableSaleValue(
                 logRecord,
                 1
             );
@@ -3276,7 +3541,7 @@
                 plankCycle
             );
 
-            const beamInput = resolveCraftInputCost(
+            const beamInput = bestAvailableSaleValue(
                 plankRecord,
                 2
             );
@@ -3441,6 +3706,8 @@
                 rawNet,
                 plankNet,
                 beamNet,
+                plankCycle,
+                beamCycle,
                 plankChainTime,
                 beamChainTime,
 
@@ -3764,6 +4031,8 @@
                 rawNet,
                 barNet,
                 nailNet,
+                barCycle,
+                nailCycle,
                 barChainTime,
                 nailChainTime,
 
@@ -4048,7 +4317,19 @@
                                             Lv. ${row.level}
                                         </small>
                                     </td>
-                                    <td class="${
+                                    <td title="${escapeHtml(craftProfitTooltip({
+                                        inputLabel: `1 ${row.ingredient}`,
+                                        inputCost: row.ingredientSale?.value,
+                                        inputSource: row.ingredientSale?.source,
+                                        outputLabel: row.item,
+                                        outputQuantity: row.outputPerBatch,
+                                        outputValue: row.cookedSale?.value,
+                                        saleSource: row.cookedSale?.source,
+                                        fee: Number(row.fee || 0),
+                                        feeLabel: 'Cooking supply fee',
+                                        profit: row.profitPerBatch,
+                                        cycle: row.currentCycle
+                                    }))}" class="${
                                         Number.isFinite(row.profitPerBatch)
                                             ? row.profitPerBatch >= 0
                                                 ? 'tqm-profit-positive'
@@ -4252,7 +4533,8 @@
                     <table class="tqm-table tqm-table-compact">
                         <thead>
                             <tr>
-                                <th>Resource</th>
+                                <th>Product</th>
+                                <th>Action</th>
                                 <th>Profit</th>
                                 <th>Profit/hr</th>
                                 <th>Sell</th>
@@ -4269,7 +4551,26 @@
                                             Lv. ${row.requiredLevel}
                                         </small>
                                     </td>
-                                    <td class="${
+                                    <td>
+                                        1 Bar → ${Number(
+                                            row.outputPerBatch
+                                        ).toLocaleString(undefined, {
+                                            maximumFractionDigits: 2
+                                        })} ${escapeHtml(row.shotType)}
+                                    </td>
+                                    <td title="${escapeHtml(craftProfitTooltip({
+                                        inputLabel: `1 ${row.metal} Bar`,
+                                        inputCost: row.barOpportunityCost,
+                                        inputSource: row.barSale?.source,
+                                        outputLabel: `${row.metal} ${row.shotType}`,
+                                        outputQuantity: row.outputPerBatch,
+                                        outputValue: row.grossSaleValue,
+                                        saleSource: row.itemSale?.source,
+                                        fee: row.fee,
+                                        feeLabel: 'Smithing supply fee',
+                                        profit: row.profitPerBatch,
+                                        cycle: row.cycle
+                                    }))}" class="${
                                         Number.isFinite(row.profitPerBatch)
                                             ? row.profitPerBatch >= 0
                                                 ? 'tqm-profit-positive'
@@ -4997,7 +5298,14 @@
         };
     }
 
-    function applyCachedInventoryToShipBuilder() {
+    function applyCachedInventoryToShipBuilder(force = false) {
+        if (
+            Boolean(state.shipBuilder?.manualInventoryOverride) &&
+            !force
+        ) {
+            return false;
+        }
+
         const wood = WOODS.includes(state.shipBuilder?.wood)
             ? state.shipBuilder.wood
             : 'Maple';
@@ -5008,6 +5316,7 @@
 
         state.shipBuilder = {
             ...state.shipBuilder,
+            manualInventoryOverride: false,
             inventory: {
                 ...DEFAULT_STATE.shipBuilder.inventory,
                 ...(state.shipBuilder?.inventory || {}),
@@ -5019,6 +5328,8 @@
                 nails: Number(items[`${metal} Nails`] || 0)
             }
         };
+
+        return true;
     }
 
     function inventoryMapsEqual(first, second) {
@@ -5036,7 +5347,7 @@
         );
     }
 
-    function scanGameInventory() {
+    function scanGameInventory(forceApplyToShipBuilder = false) {
         const preferences = {
             ...DEFAULT_STATE.preferences,
             ...(state.preferences || {})
@@ -5091,9 +5402,9 @@
                 )
         };
 
-        applyCachedInventoryToShipBuilder();
+        applyCachedInventoryToShipBuilder(forceApplyToShipBuilder);
 
-        if (changed) {
+        if (changed || forceApplyToShipBuilder) {
             saveState();
         }
 
@@ -5177,31 +5488,97 @@
         const barRecord = findItemPrice([`${metal} Bar`, `${metal} Bars`]);
         const nailRecord = findItemPrice([`${metal} Nail`, `${metal} Nails`]);
 
-        const logPrice =
-            chosenMarketPrice(logRecord) ||
-            Number(VENDOR_LOG_VALUES[wood] || 0);
+        /*
+         * Build-cost comparisons represent actually buying materials, so they
+         * require active Exchange sell listings. Vendor values and buy orders
+         * are not purchase prices and must not make a missing listing look free.
+         */
+        const logPrice = chosenMarketPrice(logRecord);
         const plankPrice = chosenMarketPrice(plankRecord);
         const beamPrice = chosenMarketPrice(beamRecord);
         const orePrice = chosenMarketPrice(oreRecord);
         const barPrice = chosenMarketPrice(barRecord);
         const nailPrice = chosenMarketPrice(nailRecord);
 
-        const rawMaterialCost =
-            remainingLogs * logPrice +
-            remainingOre * orePrice +
-            shipwrightFee;
+        const smeltingSupplyFee = Number(
+            SMELTING_SUPPLY_FEES[metal]?.fee || 0
+        );
+        const smeltingActions = smeltingYield > 0
+            ? remainingBars / smeltingYield
+            : 0;
+        const smeltingFees = smeltingActions * smeltingSupplyFee;
 
-        const finishedMaterialCost =
-            remainingFinishedPlanks * plankPrice +
-            remainingBeams * beamPrice +
-            remainingNails * nailPrice +
-            shipwrightFee;
+        const missingPrices = (requirements) => requirements
+            .filter(entry => entry.quantity > 0 && !(entry.price > 0))
+            .map(entry => entry.name);
 
-        const intermediateMaterialCost =
-            remainingFinishedPlanks * plankPrice +
-            remainingBeams * beamPrice +
-            remainingBars * barPrice +
-            shipwrightFee;
+        const rawMissingPrices = missingPrices([
+            {
+                name: `${wood} Logs`,
+                quantity: remainingLogs,
+                price: logPrice
+            },
+            {
+                name: `${metal} Ore`,
+                quantity: remainingOre,
+                price: orePrice
+            }
+        ]);
+        const intermediateMissingPrices = missingPrices([
+            {
+                name: `${wood} Planks`,
+                quantity: remainingFinishedPlanks,
+                price: plankPrice
+            },
+            {
+                name: `${wood} Beams`,
+                quantity: remainingBeams,
+                price: beamPrice
+            },
+            {
+                name: `${metal} Bars`,
+                quantity: remainingBars,
+                price: barPrice
+            }
+        ]);
+        const finishedMissingPrices = missingPrices([
+            {
+                name: `${wood} Planks`,
+                quantity: remainingFinishedPlanks,
+                price: plankPrice
+            },
+            {
+                name: `${wood} Beams`,
+                quantity: remainingBeams,
+                price: beamPrice
+            },
+            {
+                name: `${metal} Nails`,
+                quantity: remainingNails,
+                price: nailPrice
+            }
+        ]);
+
+        const rawMaterialCost = rawMissingPrices.length
+            ? NaN
+            : remainingLogs * logPrice +
+                remainingOre * orePrice +
+                smeltingFees +
+                shipwrightFee;
+
+        const intermediateMaterialCost = intermediateMissingPrices.length
+            ? NaN
+            : remainingFinishedPlanks * plankPrice +
+                remainingBeams * beamPrice +
+                remainingBars * barPrice +
+                shipwrightFee;
+
+        const finishedMaterialCost = finishedMissingPrices.length
+            ? NaN
+            : remainingFinishedPlanks * plankPrice +
+                remainingBeams * beamPrice +
+                remainingNails * nailPrice +
+                shipwrightFee;
 
         const plankTime = adjustedCraftTime(
             WOOD_CRAFT_TIMES[wood]?.plank || 0,
@@ -5220,15 +5597,17 @@
             'crafting'
         );
 
-        const barsToSmelt = Math.max(
-            0,
-            totalBarsNeeded - haveBars - (haveOre * smeltingYield / 2)
-        );
+        /*
+         * Owned ore reduces what must be purchased, but it still has to be
+         * smelted. Every bar not already owned therefore contributes smelting
+         * time and its supply fee.
+         */
+        const barsToSmelt = remainingBars;
 
         const totalCraftSeconds =
             logActions * plankTime +
             beamActions * beamTime +
-            (barsToSmelt / smeltingYield) * barTime +
+            smeltingActions * barTime +
             (remainingNails / nailOutputPerBar) * nailTime;
 
         return {
@@ -5270,6 +5649,12 @@
             orePrice,
             barPrice,
             nailPrice,
+            smeltingSupplyFee,
+            smeltingActions,
+            smeltingFees,
+            rawMissingPrices,
+            intermediateMissingPrices,
+            finishedMissingPrices,
             rawMaterialCost,
             finishedMaterialCost,
             intermediateMaterialCost,
@@ -5279,6 +5664,12 @@
 
     function renderShipBuilder() {
         const result = calculateShipBuild();
+        const formatBuildCost = value => Number.isFinite(value)
+            ? formatGold(value, { allowZero: true })
+            : 'N/A';
+        const missingListingText = missing => missing.length
+            ? `Missing Exchange listings: ${missing.join(', ')}`
+            : '';
 
         return `
             <div class="tqm-ship-builder-grid">
@@ -5438,35 +5829,35 @@
                 </section>
 
                 <section class="tqm-card">
-                    <h2>Remaining Materials Required</h2>
+                    <h2>Remaining Requirements by Build Path</h2>
 
                     <div class="tqm-material-columns tqm-material-summary">
                         <div class="tqm-material-column">
                             <div class="${result.remainingLogs <= 0 ? 'tqm-state-positive' : 'tqm-state-warning'}">
-                                <span>${escapeHtml(result.wood)} Logs</span>
+                                <span>Raw Path · ${escapeHtml(result.wood)} Logs</span>
                                 <strong>${result.remainingLogs.toLocaleString()}</strong>
                             </div>
                             <div class="${result.remainingFinishedPlanks <= 0 ? 'tqm-state-positive' : 'tqm-state-warning'}">
-                                <span>${escapeHtml(result.wood)} Planks</span>
+                                <span>Finished · ${escapeHtml(result.wood)} Planks</span>
                                 <strong>${result.remainingFinishedPlanks.toLocaleString()}</strong>
                             </div>
                             <div class="${result.remainingBeams <= 0 ? 'tqm-state-positive' : 'tqm-state-warning'}">
-                                <span>${escapeHtml(result.wood)} Beams</span>
+                                <span>Finished · ${escapeHtml(result.wood)} Beams</span>
                                 <strong>${result.remainingBeams.toLocaleString()}</strong>
                             </div>
                         </div>
 
                         <div class="tqm-material-column">
                             <div class="${result.remainingOre <= 0 ? 'tqm-state-positive' : 'tqm-state-warning'}">
-                                <span>${escapeHtml(result.metal)} Ore</span>
+                                <span>Raw Path · ${escapeHtml(result.metal)} Ore</span>
                                 <strong>${result.remainingOre.toLocaleString()}</strong>
                             </div>
                             <div class="${result.remainingBars <= 0 ? 'tqm-state-positive' : 'tqm-state-warning'}">
-                                <span>${escapeHtml(result.metal)} Bars</span>
+                                <span>Intermediate · ${escapeHtml(result.metal)} Bars</span>
                                 <strong>${result.remainingBars.toLocaleString()}</strong>
                             </div>
                             <div class="${result.remainingNails <= 0 ? 'tqm-state-positive' : 'tqm-state-warning'}">
-                                <span>${escapeHtml(result.metal)} Nails</span>
+                                <span>Finished · ${escapeHtml(result.metal)} Nails</span>
                                 <strong>${result.remainingNails.toLocaleString()}</strong>
                             </div>
                         </div>
@@ -5647,53 +6038,6 @@
                 </aside>
             ` : ''}
 
-            ${(() => {
-                const xpRows = shipBuildXpSummary(result);
-
-                return `
-                    <section class="tqm-card">
-                        <h2>Build Progress Projection</h2>
-                        <p class="tqm-note">
-                            Estimated XP assumes you gather the remaining raw
-                            materials and craft every remaining intermediate item.
-                        </p>
-
-                        <div class="tqm-table-wrap">
-                            <table class="tqm-table tqm-table-compact">
-                                <thead>
-                                    <tr>
-                                        <th>Profession</th>
-                                        <th>XP Earned</th>
-                                        <th>Current Level</th>
-                                        <th>Projected Level</th>
-                                        <th>Progress After Build</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    ${xpRows.map(row => `
-                                        <tr>
-                                            <td><strong>${escapeHtml(
-                                                row.skill[0].toUpperCase() +
-                                                row.skill.slice(1)
-                                            )}</strong></td>
-                                            <td class="tqm-profit-positive">
-                                                +${Math.floor(row.xp).toLocaleString()} XP
-                                            </td>
-                                            <td>Lv. ${row.currentLevel}</td>
-                                            <td>Lv. ${row.projected.level}</td>
-                                            <td>
-                                                ${Math.floor(row.projected.xp).toLocaleString()}
-                                                / ${row.projected.required.toLocaleString()} XP
-                                            </td>
-                                        </tr>
-                                    `).join('')}
-                                </tbody>
-                            </table>
-                        </div>
-                    </section>
-                `;
-            })()}
-
             <section class="tqm-card">
                 <h2>Build Cost Comparison</h2>
 
@@ -5708,27 +6052,34 @@
                         </thead>
                         <tbody>
                             <tr>
-                                <td><strong>Gather / Buy Raw</strong></td>
-                                <td>${formatGold(result.rawMaterialCost)}</td>
+                                <td><strong>Buy Raw Materials</strong></td>
+                                <td>${formatBuildCost(result.rawMaterialCost)}</td>
                                 <td>
-                                    ${result.remainingLogs.toLocaleString()} ${escapeHtml(result.wood)} Logs,
-                                    ${result.remainingOre.toLocaleString()} ${escapeHtml(result.metal)} Ore,
-                                    shipwright fee
+                                    ${result.rawMissingPrices.length
+                                        ? escapeHtml(missingListingText(result.rawMissingPrices))
+                                        : `${result.remainingLogs.toLocaleString()} ${escapeHtml(result.wood)} Logs,
+                                            ${result.remainingOre.toLocaleString()} ${escapeHtml(result.metal)} Ore,
+                                            ${formatGold(result.smeltingFees, { allowZero: true })} smelting fees,
+                                            shipwright fee`}
                                 </td>
                             </tr>
                             <tr>
                                 <td><strong>Buy Planks, Beams, and Bars</strong></td>
-                                <td>${formatGold(result.intermediateMaterialCost)}</td>
+                                <td>${formatBuildCost(result.intermediateMaterialCost)}</td>
                                 <td>
-                                    Remaining finished wood, ${result.remainingBars.toLocaleString()} bars,
-                                    nail crafting, shipwright fee
+                                    ${result.intermediateMissingPrices.length
+                                        ? escapeHtml(missingListingText(result.intermediateMissingPrices))
+                                        : `Remaining finished wood, ${result.remainingBars.toLocaleString()} bars,
+                                            nail crafting, shipwright fee`}
                                 </td>
                             </tr>
                             <tr>
                                 <td><strong>Buy All Finished Materials</strong></td>
-                                <td>${formatGold(result.finishedMaterialCost)}</td>
+                                <td>${formatBuildCost(result.finishedMaterialCost)}</td>
                                 <td>
-                                    Planks, beams, nails, shipwright fee
+                                    ${result.finishedMissingPrices.length
+                                        ? escapeHtml(missingListingText(result.finishedMissingPrices))
+                                        : `Planks, beams, nails, shipwright fee`}
                                 </td>
                             </tr>
                         </tbody>
@@ -5736,35 +6087,11 @@
                 </div>
 
                 <p class="tqm-note">
-                    A missing Exchange price is treated as zero. Read the relevant
-                    Exchange categories before relying on the cost comparison.
-                    Profit calculations require active sell listings for logs and finished materials. Missing listings show N/A.
+                    Costs use the lowest active Exchange sell listing. If any
+                    required item has no listing, that method shows N/A instead
+                    of treating the missing material as free. The raw-material
+                    method includes smelting supply fees and the shipwright fee.
                 </p>
-            </section>
-
-            <section class="tqm-card">
-                <h2>Current Mastery</h2>
-                <div class="tqm-summary-grid tqm-ship-mastery-grid">
-                    <div>
-                        <span>Carpentry Mastery</span>
-                        <strong>${yieldMasteryPercent('carpentry')}%</strong>
-                        <small>${Math.round(result.carpentryYield * 100)}% total output</small>
-                    </div>
-                    <div>
-                        <span>Smelting Mastery</span>
-                        <strong>${yieldMasteryPercent('smelting')}%</strong>
-                        <small>${Math.round(result.smeltingYield * 100)}% total output</small>
-                    </div>
-                    <div>
-                        <span>Crafting Mastery</span>
-                        <strong>${yieldMasteryPercent('crafting')}%</strong>
-                        <small>${Math.round(result.craftingYield * 100)}% total output</small>
-                    </div>
-                    <div>
-                        <span>Current City</span>
-                        <strong>${escapeHtml(state.currentCity)}</strong>
-                    </div>
-                </div>
             </section>
         `;
     }
@@ -5783,6 +6110,8 @@
             );
         const plan = calculateProgressPlan();
         const selectedSkill = plan?.skill || 'smelting';
+        const selectedSkillLabel =
+            selectedSkill[0].toUpperCase() + selectedSkill.slice(1);
         const selectedRecipe = plan?.recipe || null;
         const hasProgressOverride = Boolean(
             progressPlannerSessionOverrides[selectedSkill]
@@ -5868,7 +6197,12 @@
                                             ? 'selected'
                                             : ''
                                     }>
-                                        ${escapeHtml(recipe.item)} · ${recipe.xp} XP
+                                        ${escapeHtml(recipe.item)} · ${recipe.xp} XP${
+                                            Number(recipe.level || 1) >
+                                            Number(plan?.currentLevel || 1)
+                                                ? ` · Unlocks Lv. ${recipe.level}`
+                                                : ''
+                                        }
                                     </option>
                                 `;
                             }).join('')}
@@ -5929,9 +6263,14 @@
                     <div class="tqm-progress-divider"></div>
 
                     <div class="tqm-progress-goal-heading">
-                        <h3>Level Goal</h3>
+                        <h3>${plan.staged ? 'Staged Level Plan' : 'Level Goal'}</h3>
                         <span>
                             ${escapeHtml(plan.recipe.item)}
+                            ${
+                                !plan.selectedUsed
+                                    ? ` · Unlocks at Lv. ${plan.selectedUnlockLevel}`
+                                    : ''
+                            }
                         </span>
                     </div>
 
@@ -5945,22 +6284,78 @@
                             <strong>${Math.ceil(plan.xpNeeded).toLocaleString()} XP</strong>
                         </div>
                         <div>
-                            <span>Actions Required</span>
+                            <span>Total Actions</span>
                             <strong>${plan.actions.toLocaleString()}</strong>
                         </div>
                         <div>
-                            <span>Estimated Time</span>
+                            <span>${selectedSkillLabel} Time</span>
                             <strong>${formatSeconds(plan.totalSeconds)}</strong>
                         </div>
+                        ${plan.gatheringPlan.length ? `
+                            <div>
+                                <span>Gathering Time</span>
+                                <strong>${formatSeconds(plan.gatheringSeconds)}</strong>
+                            </div>
+                            <div>
+                                <span>Combined Time</span>
+                                <strong>${formatSeconds(plan.combinedSeconds)}</strong>
+                            </div>
+                        ` : ''}
                         <div>
-                            <span>XP / Action</span>
-                            <strong>${plan.recipe.xp.toLocaleString()} XP</strong>
+                            <span>Stages</span>
+                            <strong>${plan.stages.length.toLocaleString()}</strong>
                         </div>
                         <div>
-                            <span>XP / Hour</span>
-                            <strong>${formatXpPerHour(plan.recipe.xpPerHour)}</strong>
+                            <span>${plan.selectedUsed ? 'Selected Action XP / HR' : 'Selected Action'}</span>
+                            <strong>
+                                ${plan.selectedUsed
+                                    ? formatXpPerHour(plan.recipe.xpPerHour)
+                                    : `Unavailable before target · Unlocks at Lv. ${plan.selectedUnlockLevel}`}
+                            </strong>
                         </div>
                     </div>
+
+                    ${plan.stages.length ? `
+                        <div class="tqm-table-wrap" style="margin-top: 14px;">
+                            <table class="tqm-table tqm-table-compact">
+                                <thead>
+                                    <tr>
+                                        <th>Stage</th>
+                                        <th>Levels</th>
+                                        <th>Action</th>
+                                        <th>XP / Action</th>
+                                        <th>Actions</th>
+                                        <th>Time</th>
+                                        <th>Direct Input</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    ${plan.stages.map((stage, index) => `
+                                        <tr>
+                                            <td>${index + 1}</td>
+                                            <td>Lv. ${stage.startLevel} → ${stage.targetLevel}</td>
+                                            <td>
+                                                <strong>${escapeHtml(stage.recipe.item)}</strong>
+                                                ${stage.isSelectedRecipe
+                                                    ? '<small>Selected action</small>'
+                                                    : '<small>Best unlocked action</small>'}
+                                            </td>
+                                            <td>${stage.recipe.xp.toLocaleString()} XP</td>
+                                            <td>${stage.actions.toLocaleString()}</td>
+                                            <td>${formatSeconds(stage.totalSeconds)}</td>
+                                            <td>
+                                                ${stage.directIngredients.length
+                                                    ? stage.directIngredients.map(ingredient =>
+                                                        `${Math.ceil(ingredient.quantity).toLocaleString()} ${escapeHtml(ingredient.name)}`
+                                                    ).join('<br>')
+                                                    : 'None'}
+                                            </td>
+                                        </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    ` : ''}
                 ` : ''}
             </section>
 
@@ -5970,7 +6365,7 @@
                         <div class="tqm-material-result-heading">
                             <h2>Required Inputs</h2>
                             <p class="tqm-note">
-                                Materials consumed directly by the selected action.
+                                Combined materials consumed across every stage in the plan.
                             </p>
                         </div>
 
@@ -5994,34 +6389,77 @@
 
                     <section class="tqm-card">
                         <div class="tqm-material-result-heading">
-                            <h2>Raw Resources to Gather</h2>
+                            <h2>${plan.gatheringPlan.length ? 'Gathering Plan' : 'Raw Resources to Gather'}</h2>
                             <p class="tqm-note">
-                                Intermediate recipes are reduced to their original resources.
+                                ${plan.gatheringPlan.length
+                                    ? 'Gathering actions use current yield mastery and city speed. Required bait or other gathering inputs are shown separately.'
+                                    : 'Intermediate recipes are reduced to their original resources.'}
                             </p>
                         </div>
 
-                        <div class="tqm-material-result-list">
-                            ${
-                                Object.keys(plan.baseMaterials).length
-                                    ? Object.entries(plan.baseMaterials)
-                                        .sort((a, b) =>
-                                            b[1] - a[1] ||
-                                            a[0].localeCompare(b[0])
-                                        )
-                                        .map(([name, quantity]) => `
+                        ${plan.gatheringPlan.length ? `
+                            <div class="tqm-table-wrap">
+                                <table class="tqm-table tqm-table-compact">
+                                    <thead>
+                                        <tr>
+                                            <th>Resource</th>
+                                            <th>Required</th>
+                                            <th>Yield / Action</th>
+                                            <th>Gathering Actions</th>
+                                            <th>Gathering Time</th>
+                                            <th>Inputs</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${plan.gatheringPlan.map(entry => `
+                                            <tr>
+                                                <td>
+                                                    <strong>${escapeHtml(entry.item)}</strong>
+                                                    <small>${escapeHtml(
+                                                        entry.skill[0].toUpperCase() +
+                                                        entry.skill.slice(1)
+                                                    )}</small>
+                                                </td>
+                                                <td>${Math.ceil(entry.requiredQuantity).toLocaleString()}</td>
+                                                <td>${Number(entry.yieldPerAction).toFixed(2)}</td>
+                                                <td>${entry.actions.toLocaleString()}</td>
+                                                <td>${formatSeconds(entry.totalSeconds)}</td>
+                                                <td>
+                                                    ${entry.inputs.length
+                                                        ? entry.inputs.map(input =>
+                                                            `${Math.ceil(input.quantity).toLocaleString()} ${escapeHtml(input.name)}`
+                                                        ).join('<br>')
+                                                        : 'None'}
+                                                </td>
+                                            </tr>
+                                        `).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        ` : `
+                            <div class="tqm-material-result-list">
+                                ${
+                                    Object.keys(plan.baseMaterials).length
+                                        ? Object.entries(plan.baseMaterials)
+                                            .sort((a, b) =>
+                                                b[1] - a[1] ||
+                                                a[0].localeCompare(b[0])
+                                            )
+                                            .map(([name, quantity]) => `
+                                                <div class="tqm-material-result-item">
+                                                    <span>${escapeHtml(name)}</span>
+                                                    <strong>${Math.ceil(quantity).toLocaleString()}</strong>
+                                                </div>
+                                            `).join('')
+                                        : `
                                             <div class="tqm-material-result-item">
-                                                <span>${escapeHtml(name)}</span>
-                                                <strong>${Math.ceil(quantity).toLocaleString()}</strong>
+                                                <span>${escapeHtml(plan.recipe.item)}</span>
+                                                <strong>${plan.actions.toLocaleString()}</strong>
                                             </div>
-                                        `).join('')
-                                    : `
-                                        <div class="tqm-material-result-item">
-                                            <span>${escapeHtml(plan.recipe.item)}</span>
-                                            <strong>${plan.actions.toLocaleString()}</strong>
-                                        </div>
-                                    `
-                            }
-                        </div>
+                                        `
+                                }
+                            </div>
+                        `}
                     </section>
                 </div>
             ` : ''}
@@ -6549,7 +6987,7 @@
                     </h2>
                     <p>
                         ${topValue
-                            ? `Best captured value per gathered unit: ${formatGold(topValue.value)}`
+                            ? `Best sale value per gathered unit after all mastery yields: ${formatGold(topValue.value)}`
                             : 'Open an Exchange category and press Read Exchange.'}
                     </p>
                 </div>
@@ -6637,25 +7075,42 @@
     function craftProfitTooltip({
         inputLabel,
         inputCost,
+        inputSource = '',
         outputLabel,
         outputQuantity,
         outputValue,
         saleSource,
+        fee = 0,
+        feeLabel = 'Crafting fee',
         profit,
         cycle
     }) {
         const lines = [
-            `Input: ${inputLabel} (${formatGold(inputCost, { allowZero: true })})`,
-            `Expected output: ${Number(outputQuantity || 0).toFixed(2).replace(/\.00$/, '')} ${outputLabel}`,
-            `Net output value: ${formatGold(outputValue, { allowZero: true })}`,
-            `Sell through: ${saleSource || 'N/A'}`,
-            `Profit: ${signedMoney(profit)}`,
-            `Cycle: ${formatSeconds(cycle)}`
+            `Input: ${inputLabel} (${formatGold(inputCost, { allowZero: true })})`
         ];
 
-        if (/^Exchange/i.test(String(saleSource || ''))) {
-            lines.splice(4, 0, `Exchange tax: ${state.taxPercent}%`);
+        if (inputSource) {
+            lines.push(`Input source: ${inputSource}`);
         }
+
+        lines.push(
+            `Expected output: ${Number(outputQuantity || 0).toFixed(2).replace(/\.00$/, '')} ${outputLabel}`,
+            `Net output value: ${formatGold(outputValue, { allowZero: true })}`,
+            `Sell through: ${saleSource || 'N/A'}`
+        );
+
+        if (/^Exchange/i.test(String(saleSource || ''))) {
+            lines.push(`Exchange tax: ${state.taxPercent}%`);
+        }
+
+        if (Number(fee || 0) > 0) {
+            lines.push(`${feeLabel}: ${formatGold(fee, { allowZero: true })}`);
+        }
+
+        lines.push(
+            `Profit: ${signedMoney(profit)}`,
+            `Cycle: ${formatCycleSeconds(cycle)}`
+        );
 
         return lines.join('\n');
     }
@@ -6670,9 +7125,9 @@
                     <div>
                         <h2>Wood Crafting Profit</h2>
                         <p class="tqm-note">
-                            Profit compares the finished output with the input
-                            value. Inputs use the lowest sell listing when available,
-                            otherwise their immediate sale value.
+                            Profit compares the finished output with the input's
+                            immediate sale value: the best Exchange buy order after
+                            tax, or vendor value when no buy order is available.
                         </p>
                     </div>
                 </div>
@@ -6709,7 +7164,7 @@
                                             outputValue: row.plankOutputValue,
                                             saleSource: row.plankActionSale?.source,
                                             profit: row.plankActionProfit,
-                                            cycle: row.plankChainTime
+                                            cycle: row.plankCycle
                                         }))}" class="${
                                             Number.isFinite(
                                                 row.plankActionProfit
@@ -6772,7 +7227,7 @@
                                             outputValue: row.beamOutputValue,
                                             saleSource: row.beamActionSale?.source,
                                             profit: row.beamActionProfit,
-                                            cycle: row.beamChainTime
+                                            cycle: row.beamCycle
                                         }))}" class="${
                                             Number.isFinite(
                                                 row.beamActionProfit
@@ -6860,7 +7315,7 @@
                                         </strong>
                                     </td>
                                     <td>
-                                        ${formatSeconds(
+                                        ${formatCycleSeconds(
                                             adjustedCraftTime(
                                                 WOOD_CRAFT_TIMES[
                                                     row.material
@@ -6870,7 +7325,7 @@
                                         )}
                                     </td>
                                     <td>
-                                        ${formatSeconds(
+                                        ${formatCycleSeconds(
                                             adjustedCraftTime(
                                                 WOOD_CRAFT_TIMES[
                                                     row.material
@@ -6910,7 +7365,7 @@
                     <table class="tqm-table tqm-table-compact">
                         <thead>
                             <tr>
-                                <th>Resource</th>
+                                <th>Product</th>
                                 <th>Action</th>
                                 <th>Profit</th>
                                 <th>Profit/hr</th>
@@ -6923,14 +7378,38 @@
                                     <tr>
                                         <td>
                                             <strong>
-                                                ${escapeHtml(row.material)}
+                                                ${escapeHtml(`${row.material} Bars`)}
                                             </strong>
                                             <small class="tqm-level-note">
                                                 Lv. ${row.barRequiredLevel}
                                             </small>
                                         </td>
-                                        <td>2 Ore → Bars</td>
-                                        <td class="${
+                                        <td>
+                                            2 Ore → ${Number(
+                                                yieldMultiplier('smelting')
+                                            ).toLocaleString(undefined, {
+                                                maximumFractionDigits: 2
+                                            })} ${
+                                                yieldMultiplier('smelting') === 1
+                                                    ? 'Bar'
+                                                    : 'Bars'
+                                            }
+                                        </td>
+                                        <td title="${escapeHtml(craftProfitTooltip({
+                                            inputLabel: `2 ${row.material} Ore`,
+                                            inputCost: row.barActionInputCost,
+                                            inputSource: row.barActionInput?.source,
+                                            outputLabel: yieldMultiplier('smelting') === 1
+                                                ? `${row.material} Bar`
+                                                : `${row.material} Bars`,
+                                            outputQuantity: yieldMultiplier('smelting'),
+                                            outputValue: row.barActionOutputValue,
+                                            saleSource: row.barActionSale?.source,
+                                            fee: row.fee,
+                                            feeLabel: 'Smelting supply fee',
+                                            profit: row.barActionProfit,
+                                            cycle: row.barCycle
+                                        }))}" class="${
                                             Number.isFinite(
                                                 row.barActionProfit
                                             )
@@ -6980,11 +7459,30 @@
                                     <tr>
                                         <td>
                                             <strong>
-                                                ${escapeHtml(row.material)}
+                                                ${escapeHtml(`${row.material} Nails`)}
                                             </strong>
+                                            <small class="tqm-level-note">
+                                                Lv. ${row.nailRequiredLevel}
+                                            </small>
                                         </td>
-                                        <td>1 Bar → Nails</td>
-                                        <td class="${
+                                        <td>
+                                            1 Bar → ${Number(
+                                                row.nailsPerAction
+                                            ).toLocaleString(undefined, {
+                                                maximumFractionDigits: 2
+                                            })} Nails
+                                        </td>
+                                        <td title="${escapeHtml(craftProfitTooltip({
+                                            inputLabel: `1 ${row.material} Bar`,
+                                            inputCost: row.nailActionInputCost,
+                                            inputSource: row.nailActionInput?.source,
+                                            outputLabel: `${row.material} Nails`,
+                                            outputQuantity: row.nailsPerAction,
+                                            outputValue: row.nailActionOutputValue,
+                                            saleSource: row.nailActionSale?.source,
+                                            profit: row.nailActionProfit,
+                                            cycle: row.nailCycle
+                                        }))}" class="${
                                             Number.isFinite(
                                                 row.nailActionProfit
                                             )
@@ -7081,7 +7579,7 @@
                                         </strong>
                                     </td>
                                     <td>
-                                        ${formatSeconds(
+                                        ${formatCycleSeconds(
                                             adjustedCraftTime(
                                                 METAL_CRAFT_TIMES[
                                                     row.material
@@ -7091,7 +7589,7 @@
                                         )}
                                     </td>
                                     <td>
-                                        ${formatSeconds(
+                                        ${formatCycleSeconds(
                                             adjustedCraftTime(
                                                 METAL_CRAFT_TIMES[
                                                     row.material
@@ -8729,7 +9227,7 @@
         document.querySelector(
             '#tqm-toggle-inventory-panel'
         )?.addEventListener('click', () => {
-            scanGameInventory();
+            scanGameInventory(true);
 
             state.shipBuilder = {
                 ...state.shipBuilder,
@@ -8756,7 +9254,7 @@
                 return;
             }
 
-            scanGameInventory();
+            scanGameInventory(true);
             showToast('Inventory scan refreshed.');
             renderActiveTab('ship');
         });
@@ -8780,6 +9278,7 @@
 
                 state.shipBuilder = {
                     ...state.shipBuilder,
+                    manualInventoryOverride: true,
                     inventory: {
                         ...DEFAULT_STATE.shipBuilder.inventory,
                         ...(state.shipBuilder?.inventory || {}),
@@ -8878,6 +9377,8 @@
                             ...DEFAULT_STATE.shipBuilder.inventory,
                             ...(state.shipBuilder?.inventory || {})
                         },
+                        manualInventoryOverride:
+                            Boolean(state.shipBuilder?.manualInventoryOverride),
                         inventoryPanelOpen:
                             Boolean(state.shipBuilder?.inventoryPanelOpen),
                         inventoryPanelPosition: {
@@ -8912,6 +9413,8 @@
                     ...DEFAULT_STATE.shipBuilder.inventory,
                     ...(state.shipBuilder?.inventory || {})
                 },
+                manualInventoryOverride:
+                    Boolean(state.shipBuilder?.manualInventoryOverride),
                 inventoryPanelOpen:
                     Boolean(state.shipBuilder?.inventoryPanelOpen),
                 inventoryPanelPosition: {
@@ -8942,6 +9445,7 @@
         const saveShipInventory = () => {
             state.shipBuilder = {
                 ...state.shipBuilder,
+                manualInventoryOverride: true,
                 inventory: {
                     logs: positiveNumber(document.querySelector('#tqm-have-logs')?.value),
                     ore: positiveNumber(document.querySelector('#tqm-have-ore')?.value),
@@ -8975,6 +9479,7 @@
             () => {
                 state.shipBuilder = {
                     ...state.shipBuilder,
+                    manualInventoryOverride: true,
                     inventory: {
                         logs: 0,
                         ore: 0,
@@ -8987,7 +9492,9 @@
 
                 saveState();
                 renderActiveTab('ship');
-                showToast('Owned ship materials cleared.');
+                showToast(
+                    'Owned ship materials cleared. Inventory refresh will restore scanned amounts.'
+                );
             }
         );
 
@@ -9319,7 +9826,7 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
                     return;
                 }
 
-                scanGameInventory();
+                scanGameInventory(true);
                 showToast('Inventory scan complete.');
                 renderActiveTab('mastery');
             });
@@ -9333,7 +9840,11 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
                     cargoItems: {},
                     updatedAt: 0
                 };
-                applyCachedInventoryToShipBuilder();
+                state.shipBuilder = {
+                    ...state.shipBuilder,
+                    manualInventoryOverride: false
+                };
+                applyCachedInventoryToShipBuilder(true);
                 saveState();
                 showToast('Inventory cache cleared.');
                 renderActiveTab('mastery');
@@ -12993,7 +13504,7 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
     }, 1000);
 
     console.info(
-        `[Tidefall Quartermaster] Loaded v${VERSION}`
+        `[Tidefall Quartermaster] Loaded v${VERSION} (${BUILD_ID})`
     );
 
     document.addEventListener('keydown', event => {
