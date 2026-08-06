@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tidefall Quartermaster
 // @namespace    tidefall-quartermaster
-// @version      1.0.10
+// @version      1.0.20
 // @description  Standalone Exchange reader and mastery-aware profit advisor for Tidefall
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=playtidefall.com
 // @updateURL    https://raw.githubusercontent.com/UserCarl/tidefall-quartermaster/main/Tidefall_Quartermaster.user.js
@@ -13,8 +13,8 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.0.10';
-    const BUILD_ID = '2026-08-05-official';
+    const VERSION = '1.0.20';
+    const BUILD_ID = '2026-08-06-official-buy-craft';
     const STORAGE_KEY = 'tf-quartermaster-v1';
     const BUTTON_ID = 'tf-quartermaster-button';
     const VENDOR_BUTTON_ID = 'tf-quartermaster-vendor-button';
@@ -35,6 +35,17 @@
         if (!allowZero && amount <= 0) return '—';
 
         return `${Math.round(amount).toLocaleString()}g`;
+    }
+
+    function formatPercent(value, maximumFractionDigits = 1) {
+        const amount = Number(value);
+
+        if (!Number.isFinite(amount)) return '—';
+
+        return `${amount.toLocaleString(undefined, {
+            minimumFractionDigits: 0,
+            maximumFractionDigits
+        })}%`;
     }
 
     const DEFAULT_STATE = {
@@ -133,7 +144,8 @@
             showRawMaterials: true,
             showIntermediateMaterials: true,
             showShipProgress: true,
-            autoRefreshInventory: true
+            autoRefreshInventory: true,
+            showBuyCraftRecommendations: false
         },
         masteryUpdatedAt: 0,
         updatedAt: 0
@@ -679,6 +691,27 @@
                 vendorPrice: Number(
                     sourceRecord.vendorPrice ||
                     existing.vendorPrice ||
+                    0
+                ),
+                askDepth: Array.isArray(sourceRecord.askDepth)
+                    ? sourceRecord.askDepth.map(level => ({ ...level }))
+                    : (existing.askDepth || []),
+                bidDepth: Array.isArray(sourceRecord.bidDepth)
+                    ? sourceRecord.bidDepth.map(level => ({ ...level }))
+                    : (existing.bidDepth || []),
+                askQuantity: Number(
+                    sourceRecord.askQuantity ||
+                    existing.askQuantity ||
+                    0
+                ),
+                bidQuantity: Number(
+                    sourceRecord.bidQuantity ||
+                    existing.bidQuantity ||
+                    0
+                ),
+                depthCapturedAt: Number(
+                    sourceRecord.depthCapturedAt ||
+                    existing.depthCapturedAt ||
                     0
                 ),
                 source:
@@ -2914,18 +2947,82 @@
             );
     }
 
-    function depthPriceFromSide(root, side) {
-        const sideLabel = exactTextElements(root, side)[0];
-        if (!sideLabel) return 0;
+    function marketDepthLevels(root, side) {
+        const normalizedSide = String(side || '').toUpperCase();
+        const bookSide = normalizedSide === 'SELLER' || normalizedSide === 'ASK'
+            ? 'ask'
+            : normalizedSide === 'BUYER' || normalizedSide === 'BID'
+                ? 'bid'
+                : '';
+
+        /*
+         * Tidefall exposes the reliable order-book values directly on each
+         * row. Prefer these attributes over reading formatted cell text.
+         * Example:
+         * data-mkt-book-side="ask"
+         * data-mkt-book-price="14"
+         * data-mkt-book-qty="866"
+         */
+        if (root && bookSide) {
+            const attributeLevels = [...root.querySelectorAll(
+                `[data-mkt-book-side="${bookSide}"]`
+            )]
+                .map(row => {
+                    const price = Number(
+                        row.getAttribute('data-mkt-book-price') || 0
+                    );
+                    const quantity = Number(
+                        row.getAttribute('data-mkt-book-qty') || 0
+                    );
+                    const cells = directVisibleChildren(row);
+
+                    return {
+                        price,
+                        quantity,
+                        party: normalizeName(cells[0]?.innerText),
+                        location: normalizeName(cells[1]?.innerText)
+                    };
+                })
+                .filter(level =>
+                    Number.isFinite(level.price) && level.price > 0 &&
+                    Number.isFinite(level.quantity) && level.quantity > 0
+                );
+
+            if (attributeLevels.length) {
+                const merged = new Map();
+
+                attributeLevels.forEach(level => {
+                    const key = Number(level.price).toFixed(6);
+                    const existing = merged.get(key) || {
+                        price: Number(level.price),
+                        quantity: 0,
+                        orders: 0
+                    };
+
+                    existing.quantity += Number(level.quantity || 0);
+                    existing.orders += 1;
+                    merged.set(key, existing);
+                });
+
+                return [...merged.values()].sort((a, b) =>
+                    bookSide === 'ask'
+                        ? a.price - b.price
+                        : b.price - a.price
+                );
+            }
+        }
+
+        const sideLabel = exactTextElements(root, normalizedSide)[0];
+        if (!sideLabel) return [];
 
         const section = closestMarketSection(
             sideLabel,
-            side === 'SELLER' ? 'buyer' : 'seller'
+            normalizedSide === 'SELLER' ? 'buyer' : 'seller'
         ) || root;
 
         const opposite = exactTextElements(
             section,
-            side === 'SELLER' ? 'BUYER' : 'SELLER'
+            normalizedSide === 'SELLER' ? 'BUYER' : 'SELLER'
         )[0];
 
         const candidates = [...section.querySelectorAll(
@@ -2938,19 +3035,19 @@
 
                 const relationToLabel =
                     sideLabel.compareDocumentPosition(row);
-                const comesAfter =
-                    Boolean(relationToLabel & Node.DOCUMENT_POSITION_FOLLOWING);
+                const comesAfter = Boolean(
+                    relationToLabel & Node.DOCUMENT_POSITION_FOLLOWING
+                );
 
                 if (!comesAfter) return false;
 
                 if (opposite) {
                     const relationToOpposite =
                         row.compareDocumentPosition(opposite);
-                    const comesBeforeOpposite =
-                        Boolean(
-                            relationToOpposite &
-                            Node.DOCUMENT_POSITION_FOLLOWING
-                        );
+                    const comesBeforeOpposite = Boolean(
+                        relationToOpposite &
+                        Node.DOCUMENT_POSITION_FOLLOWING
+                    );
 
                     if (!comesBeforeOpposite) return false;
                 }
@@ -2959,25 +3056,99 @@
                 return cells.length >= 3 && cells.length <= 6;
             });
 
-        for (const row of candidates) {
+        const rawLevels = [];
+
+        candidates.forEach(row => {
             const cells = directVisibleChildren(row);
             const values = cells.map(cell => normalizeName(cell.innerText));
+            const joined = values.join(' ').toLowerCase();
 
-            /*
-             * Market depth rows are Seller/Buyer, Location, Price, Quantity.
-             * Prefer the third visible cell, then fall back to the first
-             * numeric cell after the location.
-             */
-            const preferred = numberFromText(values[2]);
-            if (preferred > 0) return preferred;
-
-            for (let index = 1; index < values.length; index += 1) {
-                const value = numberFromText(values[index]);
-                if (value > 0) return value;
+            if (
+                /\b(?:seller|buyer)\b/.test(joined) &&
+                /\bprice\b/.test(joined) &&
+                /\bqty|quantity\b/.test(joined)
+            ) {
+                return;
             }
-        }
 
-        return 0;
+            let price = numberFromText(values[2]);
+            let quantity = numberFromText(values[3]);
+
+            if (!(price > 0) || !(quantity > 0)) {
+                const numericValues = values
+                    .slice(1)
+                    .map(value => numberFromText(value))
+                    .filter(value => value > 0);
+
+                if (numericValues.length >= 2) {
+                    price = numericValues[numericValues.length - 2];
+                    quantity = numericValues[numericValues.length - 1];
+                }
+            }
+
+            if (!(price > 0) || !(quantity > 0)) return;
+
+            rawLevels.push({
+                price,
+                quantity,
+                party: values[0] || '',
+                location: values[1] || ''
+            });
+        });
+
+        const merged = new Map();
+
+        rawLevels.forEach(level => {
+            const key = Number(level.price).toFixed(6);
+            const existing = merged.get(key) || {
+                price: Number(level.price),
+                quantity: 0,
+                orders: 0
+            };
+
+            existing.quantity += Number(level.quantity || 0);
+            existing.orders += 1;
+            merged.set(key, existing);
+        });
+
+        return [...merged.values()].sort((a, b) =>
+            normalizedSide === 'SELLER'
+                ? a.price - b.price
+                : b.price - a.price
+        );
+    }
+
+    function marketDepthSideSnapshot(root, side) {
+        const normalizedSide = String(side || '').toUpperCase();
+        const levels = marketDepthLevels(root, normalizedSide);
+        const textRoot = root instanceof Document ? root.body : root;
+        const text = normalizeName(
+            textRoot?.innerText || textRoot?.textContent
+        ).toLowerCase();
+        const emptyPhrases = normalizedSide === 'SELLER'
+            ? [
+                'no sell orders',
+                'no seller orders',
+                'no asks'
+            ]
+            : [
+                'no buy orders',
+                'no buyer orders',
+                'no bids'
+            ];
+        const explicitlyEmpty = emptyPhrases.some(phrase =>
+            text.includes(phrase)
+        );
+
+        return {
+            levels,
+            explicitlyEmpty,
+            observed: levels.length > 0 || explicitlyEmpty
+        };
+    }
+
+    function depthPriceFromSide(root, side) {
+        return Number(marketDepthLevels(root, side)[0]?.price || 0);
     }
 
     function recentTradeMedian(root, maximumRows = 5) {
@@ -3011,6 +3182,36 @@
         return sorted.length % 2
             ? sorted[middle]
             : (sorted[middle - 1] + sorted[middle]) / 2;
+    }
+
+    function marketDetailCaptureRoot(startElement) {
+        let container = startElement instanceof HTMLElement
+            ? startElement
+            : null;
+
+        /*
+         * The item stats and order book are in separate left/right columns.
+         * Climb until both columns are inside the same ancestor so the depth
+         * rows can be read from the currently open item detail.
+         */
+        for (let depth = 0; container && depth < 16; depth += 1) {
+            if (
+                container.querySelector(
+                    [
+                        '.mkt-detail-book-table',
+                        'td.mkt-empty',
+                        '[data-mkt-book-side="ask"]',
+                        '[data-mkt-book-side="bid"]'
+                    ].join(',')
+                )
+            ) {
+                return container;
+            }
+
+            container = container.parentElement;
+        }
+
+        return document;
     }
 
     function scanOpenItemDetail() {
@@ -3100,14 +3301,30 @@
             vendorCell.querySelector('.mkt-detail-stats-val')?.textContent
         );
 
+        const marketDetailRoot = marketDetailCaptureRoot(statsRoot);
         const vendorPrice = numberFromText(rawText);
-        const estimatedAsk =
-            detailValueByLabel(detailContainer, 'ESTIMATED ASK') ||
-            depthPriceFromSide(detailContainer, 'SELLER');
-        const highestBid =
-            depthPriceFromSide(detailContainer, 'BUYER');
+        const sellerSnapshot = marketDepthSideSnapshot(
+            marketDetailRoot,
+            'SELLER'
+        );
+        const buyerSnapshot = marketDepthSideSnapshot(
+            marketDetailRoot,
+            'BUYER'
+        );
+        const sellerDepth = sellerSnapshot.levels;
+        const buyerDepth = buyerSnapshot.levels;
+        const estimatedAsk = sellerSnapshot.explicitlyEmpty
+            ? 0
+            : (
+                detailValueByLabel(detailContainer, 'ESTIMATED ASK') ||
+                detailValueByLabel(marketDetailRoot, 'ESTIMATED ASK') ||
+                Number(sellerDepth[0]?.price || 0)
+            );
+        const highestBid = buyerSnapshot.explicitlyEmpty
+            ? 0
+            : Number(buyerDepth[0]?.price || 0);
         const tradeMedian =
-            recentTradeMedian(detailContainer, 5);
+            recentTradeMedian(marketDetailRoot, 5);
 
         if (!itemName) {
             state.vendorDebug = {
@@ -3151,11 +3368,11 @@
             ...existing,
             id: itemId || existing.id || null,
             name: itemName,
-            ask: estimatedAsk > 0
-                ? estimatedAsk
+            ask: sellerSnapshot.observed
+                ? Number(estimatedAsk || 0)
                 : Number(existing.ask || 0),
-            bid: highestBid > 0
-                ? highestBid
+            bid: buyerSnapshot.observed
+                ? Number(highestBid || 0)
                 : Number(existing.bid || 0),
             lastSold: tradeMedian > 0
                 ? tradeMedian
@@ -3168,6 +3385,22 @@
                     0
                 ),
             vendorPrice,
+            askDepth: sellerSnapshot.observed
+                ? sellerDepth
+                : (existing.askDepth || []),
+            bidDepth: buyerSnapshot.observed
+                ? buyerDepth
+                : (existing.bidDepth || []),
+            askQuantity: sellerSnapshot.observed
+                ? Number(sellerDepth[0]?.quantity || 0)
+                : Number(existing.askQuantity || 0),
+            bidQuantity: buyerSnapshot.observed
+                ? Number(buyerDepth[0]?.quantity || 0)
+                : Number(existing.bidQuantity || 0),
+            depthCapturedAt:
+                sellerSnapshot.observed || buyerSnapshot.observed
+                    ? Date.now()
+                    : Number(existing.depthCapturedAt || 0),
             source: 'exchange-detail-market+vendor',
             capturedAt: Date.now()
         };
@@ -3186,8 +3419,14 @@
             status: shotPricePropagated
                 ? 'Market prices saved; vendor copied to all shot types'
                 : `Market detail saved: ask ${
-                    estimatedAsk || '—'
-                }, bid ${highestBid || '—'}, recent median ${
+                    sellerSnapshot.explicitlyEmpty
+                        ? 'none'
+                        : (estimatedAsk || '—')
+                } (${Number(sellerDepth[0]?.quantity || 0).toLocaleString()} available), bid ${
+                    buyerSnapshot.explicitlyEmpty
+                        ? 'none'
+                        : (highestBid || '—')
+                } (${Number(buyerDepth[0]?.quantity || 0).toLocaleString()} wanted), recent median ${
                     tradeMedian || '—'
                 }`,
             itemId: itemId || null,
@@ -3269,22 +3508,105 @@
         return analyzeMarketPrice(record).price;
     }
 
+    function normalizedDepthLevels(record, side) {
+        const key = side === 'bid' ? 'bidDepth' : 'askDepth';
+        const levels = Array.isArray(record?.[key])
+            ? record[key]
+            : [];
+
+        return levels
+            .map(level => ({
+                price: Number(level?.price || 0),
+                quantity: Number(level?.quantity || 0)
+            }))
+            .filter(level => level.price > 0 && level.quantity > 0)
+            .sort((a, b) =>
+                side === 'bid'
+                    ? b.price - a.price
+                    : a.price - b.price
+            );
+    }
+
+    function executeMarketDepth(record, side, quantity) {
+        const requested = Math.max(0, Number(quantity) || 0);
+        const levels = normalizedDepthLevels(record, side);
+        let remaining = requested;
+        let total = 0;
+        let filled = 0;
+        let levelsUsed = 0;
+        const fills = [];
+
+        for (const level of levels) {
+            if (!(remaining > 0)) break;
+
+            const amount = Math.min(remaining, level.quantity);
+            if (!(amount > 0)) continue;
+
+            total += amount * level.price;
+            filled += amount;
+            remaining -= amount;
+            levelsUsed += 1;
+            fills.push({
+                price: level.price,
+                quantity: amount
+            });
+        }
+
+        return {
+            known: levels.length > 0,
+            requested,
+            filled,
+            unfilled: Math.max(0, remaining),
+            complete: requested <= 0 || remaining <= 0.000001,
+            total,
+            averagePrice: filled > 0 ? total / filled : 0,
+            bestPrice: Number(levels[0]?.price || 0),
+            bestPriceQuantity: Number(levels[0]?.quantity || 0),
+            totalAvailable: levels.reduce(
+                (sum, level) => sum + level.quantity,
+                0
+            ),
+            levelsUsed,
+            fills
+        };
+    }
+
     function exchangeBuyCost(record, quantity = 1) {
         const count = Math.max(0, Number(quantity) || 0);
         const marketAnalysis = analyzeMarketPrice(record);
         const marketPrice = marketAnalysis.price;
+        const depth = executeMarketDepth(record, 'ask', count);
+        const hasUsableDepth = depth.known && depth.complete;
+        const value = hasUsableDepth
+            ? depth.total
+            : depth.known && !depth.complete
+                ? NaN
+                : marketPrice > 0
+                    ? marketPrice * count
+                    : NaN;
 
         return {
-            value: marketPrice > 0
-                ? marketPrice * count
-                : NaN,
-            source: marketPrice > 0
+            value,
+            source: Number.isFinite(value) && value > 0
                 ? 'Exchange Listing'
                 : 'Unavailable',
             marketPrice,
+            averagePrice: hasUsableDepth
+                ? depth.averagePrice
+                : marketPrice,
             marketSource: marketAnalysis.source,
             askRejected: marketAnalysis.askRejected,
-            bidIgnored: marketAnalysis.bidIgnored
+            bidIgnored: marketAnalysis.bidIgnored,
+            depthKnown: depth.known,
+            depthComplete: depth.complete,
+            availableAtBestPrice: depth.known
+                ? depth.bestPriceQuantity
+                : Number(record?.askQuantity || 0),
+            totalAvailable: depth.known
+                ? depth.totalAvailable
+                : 0,
+            levelsUsed: depth.levelsUsed,
+            requestedQuantity: count
         };
     }
 
@@ -3406,28 +3728,94 @@
     function bestSaleValue(record, quantity = 1) {
         const count = Math.max(0, Number(quantity) || 0);
         const sale = analyzeImmediateSale(record);
-        const value = sale.netUnitValue > 0
+        const bidDepth = executeMarketDepth(record, 'bid', count);
+        const vendorPrice = Number(sale.vendorPrice || 0);
+        const vendorAllValue = vendorPrice > 0
+            ? vendorPrice * count
+            : NaN;
+        let value = sale.netUnitValue > 0
             ? sale.netUnitValue * count
             : NaN;
+        let source = sale.source;
+        let exchangeQuantity = 0;
+        let vendorQuantity = source === 'Vendor' ? count : 0;
+        let depthComplete = true;
+
+        if (sale.source === 'Exchange Buy Order' && bidDepth.known) {
+            let remaining = count;
+            let exchangeNetValue = 0;
+
+            for (const level of normalizedDepthLevels(record, 'bid')) {
+                if (!(remaining > 0)) break;
+
+                const netUnit = netPrice(level.price);
+                if (vendorPrice > 0 && netUnit <= vendorPrice) {
+                    break;
+                }
+
+                const amount = Math.min(remaining, level.quantity);
+                exchangeNetValue += amount * netUnit;
+                exchangeQuantity += amount;
+                remaining -= amount;
+            }
+
+            vendorQuantity = vendorPrice > 0 ? remaining : 0;
+            depthComplete = remaining <= 0.000001 || vendorQuantity > 0;
+
+            if (vendorQuantity > 0) {
+                value = exchangeNetValue + vendorQuantity * vendorPrice;
+                source = exchangeQuantity > 0
+                    ? 'Exchange Buy Order + Vendor'
+                    : 'Vendor';
+            } else if (remaining <= 0.000001) {
+                value = exchangeNetValue;
+                source = 'Exchange Buy Order';
+            } else {
+                value = NaN;
+                source = 'Unavailable';
+            }
+
+            if (
+                Number.isFinite(vendorAllValue) &&
+                vendorAllValue >= Number(value || 0)
+            ) {
+                value = vendorAllValue;
+                source = 'Vendor';
+                exchangeQuantity = 0;
+                vendorQuantity = count;
+                depthComplete = true;
+            }
+        }
 
         return {
             value,
-            source: sale.source,
+            source,
             exchangeValue:
-                sale.source === 'Exchange Buy Order' ||
-                sale.source === 'Exchange Listing'
+                source === 'Exchange Buy Order' ||
+                source === 'Exchange Buy Order + Vendor'
                     ? value
                     : NaN,
-            vendorValue:
-                sale.vendorPrice > 0
-                    ? sale.vendorPrice * count
-                    : NaN,
+            vendorValue: vendorAllValue,
             marketPrice: sale.bid,
             vendorPrice: sale.vendorPrice,
             recentTradeMedian: sale.recentTradeMedian,
-            marketSource: sale.source,
+            marketSource: source,
             askRejected: false,
-            bidIgnored: false
+            bidIgnored: false,
+            depthKnown: bidDepth.known,
+            depthComplete,
+            availableAtBestPrice: bidDepth.known
+                ? bidDepth.bestPriceQuantity
+                : Number(record?.bidQuantity || 0),
+            totalAvailable: bidDepth.known
+                ? bidDepth.totalAvailable
+                : 0,
+            bestPrice: bidDepth.known
+                ? bidDepth.bestPrice
+                : Number(sale.bid || 0),
+            requestedQuantity: count,
+            exchangeQuantity,
+            vendorQuantity
         };
     }
 
@@ -6759,6 +7147,347 @@
         `;
     }
 
+    function calculateBuyAndCraftOpportunities(
+        woodRows = calculateWoodRows(),
+        metalRows = calculateMetalRows()
+    ) {
+        const opportunities = [];
+        const immediateSaleSources = new Set([
+            'Exchange Buy Order',
+            'Exchange Buy Order + Vendor',
+            'Vendor'
+        ]);
+
+        const addOpportunity = ({
+            item,
+            type,
+            route,
+            inputLabel,
+            inputCost,
+            outputValue,
+            saleSource,
+            fee = 0,
+            cycle,
+            rawQuantity = 1,
+            outputQuantity = 1,
+            inputPurchase = null,
+            outputSale = null,
+            available = true
+        }) => {
+            const purchaseCost = Number(inputCost);
+            const netOutputValue = Number(outputValue);
+            const feeCost = Math.max(0, Number(fee) || 0);
+            const seconds = Number(cycle);
+            const rawCount = Math.max(0.0001, Number(rawQuantity) || 1);
+            const outputCount = Math.max(
+                0.0001,
+                Number(outputQuantity) || 1
+            );
+
+            if (
+                !available ||
+                !(purchaseCost > 0) ||
+                !Number.isFinite(netOutputValue) ||
+                !(netOutputValue > 0) ||
+                !(seconds > 0) ||
+                !immediateSaleSources.has(String(saleSource || ''))
+            ) {
+                return;
+            }
+
+            const invested = purchaseCost + feeCost;
+            const profit = netOutputValue - invested;
+            const perHour = goldPerHour(profit, seconds);
+            const roi = invested > 0
+                ? profit / invested * 100
+                : NaN;
+            const capacities = [];
+
+            if (
+                inputPurchase?.depthKnown &&
+                Number(inputPurchase.availableAtBestPrice || 0) > 0
+            ) {
+                capacities.push({
+                    side: 'input',
+                    batches: Math.floor(
+                        Number(inputPurchase.availableAtBestPrice) /
+                        rawCount
+                    )
+                });
+            }
+
+            if (
+                String(saleSource || '').startsWith('Exchange Buy Order') &&
+                outputSale?.depthKnown &&
+                Number(outputSale.availableAtBestPrice || 0) > 0
+            ) {
+                capacities.push({
+                    side: 'output',
+                    batches: Math.floor(
+                        Number(outputSale.availableAtBestPrice) /
+                        outputCount
+                    )
+                });
+            }
+
+            const validCapacities = capacities.filter(
+                capacity => capacity.batches >= 0
+            );
+            const limitingCapacity = validCapacities.length
+                ? [...validCapacities].sort(
+                    (a, b) => a.batches - b.batches
+                )[0]
+                : null;
+            const quoteBatchCapacity = limitingCapacity
+                ? limitingCapacity.batches
+                : null;
+            const rawAvailableAtQuote = Number.isFinite(quoteBatchCapacity)
+                ? quoteBatchCapacity * rawCount
+                : null;
+            const outputAvailableAtQuote = Number.isFinite(quoteBatchCapacity)
+                ? quoteBatchCapacity * outputCount
+                : null;
+            const totalProfitAtQuote = Number.isFinite(quoteBatchCapacity)
+                ? quoteBatchCapacity * profit
+                : null;
+
+            opportunities.push({
+                item,
+                type,
+                route,
+                inputLabel,
+                inputCost: purchaseCost,
+                outputValue: netOutputValue,
+                saleSource,
+                fee: feeCost,
+                invested,
+                profit,
+                perHour,
+                roi,
+                cycle: seconds,
+                profitPerRaw: profit / rawCount,
+                rawQuantity: rawCount,
+                outputQuantity: outputCount,
+                inputDepthKnown: Boolean(inputPurchase?.depthKnown),
+                outputDepthKnown: Boolean(outputSale?.depthKnown),
+                inputBestPrice: Number(
+                    inputPurchase?.marketPrice ||
+                    inputPurchase?.averagePrice ||
+                    0
+                ),
+                outputBestPrice: Number(
+                    outputSale?.bestPrice ||
+                    outputSale?.marketPrice ||
+                    0
+                ),
+                inputAvailableAtBestPrice: Number(
+                    inputPurchase?.availableAtBestPrice || 0
+                ),
+                outputAvailableAtBestPrice: Number(
+                    outputSale?.availableAtBestPrice || 0
+                ),
+                quoteBatchCapacity,
+                rawAvailableAtQuote,
+                outputAvailableAtQuote,
+                totalProfitAtQuote,
+                quoteLimitSide: limitingCapacity?.side || ''
+            });
+        };
+
+        woodRows.forEach(row => {
+            const logRecord = findItemPrice([
+                `${row.material} Log`,
+                `${row.material} Logs`
+            ]);
+            const logPurchase = exchangeBuyCost(logRecord, 1);
+
+            addOpportunity({
+                item: `${row.material} Planks`,
+                type: 'Wood',
+                route:
+                    `Buy ${row.material} Logs → Make Planks → ` +
+                    `${row.plankSale?.source || 'Unavailable'}`,
+                inputLabel: `1 ${row.material} Log`,
+                inputCost: logPurchase.value,
+                outputValue: row.plankSale?.value,
+                saleSource: row.plankSale?.source,
+                cycle: row.plankChainTime,
+                rawQuantity: 1,
+                outputQuantity: yieldMultiplier('carpentry'),
+                inputPurchase: logPurchase,
+                outputSale: row.plankSale,
+                available: row.canCraft
+            });
+
+            addOpportunity({
+                item: `${row.material} Beams`,
+                type: 'Wood',
+                route:
+                    `Buy ${row.material} Logs → Make Planks → Make Beams → ` +
+                    `${row.beamSale?.source || 'Unavailable'}`,
+                inputLabel: `1 ${row.material} Log`,
+                inputCost: logPurchase.value,
+                outputValue: row.beamSale?.value,
+                saleSource: row.beamSale?.source,
+                cycle: row.beamChainTime,
+                rawQuantity: 1,
+                outputQuantity:
+                    yieldMultiplier('carpentry') *
+                    yieldMultiplier('carpentry') / 2,
+                inputPurchase: logPurchase,
+                outputSale: row.beamSale,
+                available: row.canCraft
+            });
+        });
+
+        metalRows.forEach(row => {
+            const oreRecord = findItemPrice([`${row.material} Ore`]);
+            const barRecord = findItemPrice([
+                `${row.material} Bar`,
+                `${row.material} Bars`
+            ]);
+            const nailRecord = findItemPrice([
+                `${row.material} Nail`,
+                `${row.material} Nails`
+            ]);
+            const orePurchase = exchangeBuyCost(oreRecord, 2);
+            const barsPerSmelt = yieldMultiplier('smelting');
+            const nailsFromSmelt =
+                barsPerSmelt * 4 * yieldMultiplier('crafting');
+            const barSale = bestSaleValue(barRecord, barsPerSmelt);
+            const nailSale = bestSaleValue(
+                nailRecord,
+                nailsFromSmelt
+            );
+
+            addOpportunity({
+                item: `${row.material} Bars`,
+                type: 'Metal',
+                route:
+                    `Buy ${row.material} Ore → Smelt Bars → ` +
+                    `${barSale.source || 'Unavailable'}`,
+                inputLabel: `2 ${row.material} Ore`,
+                inputCost: orePurchase.value,
+                outputValue: barSale.value,
+                saleSource: barSale.source,
+                fee: row.fee,
+                cycle: row.barCycle,
+                rawQuantity: 2,
+                outputQuantity: barsPerSmelt,
+                inputPurchase: orePurchase,
+                outputSale: barSale,
+                available: row.canSmelt
+            });
+
+            addOpportunity({
+                item: `${row.material} Nails`,
+                type: 'Metal',
+                route:
+                    `Buy ${row.material} Ore → Smelt Bars → Make Nails → ` +
+                    `${nailSale.source || 'Unavailable'}`,
+                inputLabel: `2 ${row.material} Ore`,
+                inputCost: orePurchase.value,
+                outputValue: nailSale.value,
+                saleSource: nailSale.source,
+                fee: row.fee,
+                cycle:
+                    row.barCycle + barsPerSmelt * row.nailCycle,
+                rawQuantity: 2,
+                outputQuantity: nailsFromSmelt,
+                inputPurchase: orePurchase,
+                outputSale: nailSale,
+                available: row.canCraftNails
+            });
+        });
+
+        calculateCookingRows().forEach(row => {
+            const ingredientRecord = findItemPrice([
+                row.ingredient,
+                `${row.ingredient}s`
+            ]);
+            const cookedRecord = findItemPrice([row.item]);
+            const ingredientPurchase = exchangeBuyCost(
+                ingredientRecord,
+                1
+            );
+            const cookedSale = bestSaleValue(
+                cookedRecord,
+                row.outputPerBatch
+            );
+
+            addOpportunity({
+                item: row.item,
+                type: 'Cooking',
+                route:
+                    `Buy ${row.ingredient} → Cook ${row.item} → ` +
+                    `${cookedSale.source || 'Unavailable'}`,
+                inputLabel: `1 ${row.ingredient}`,
+                inputCost: ingredientPurchase.value,
+                outputValue: cookedSale.value,
+                saleSource: cookedSale.source,
+                fee: row.fee,
+                cycle: row.currentCycle,
+                rawQuantity: 1,
+                outputQuantity: row.outputPerBatch,
+                inputPurchase: ingredientPurchase,
+                outputSale: cookedSale,
+                available: row.canCraft
+            });
+        });
+
+        const metalByName = new Map(
+            metalRows.map(row => [row.material, row])
+        );
+
+        calculateAmmunitionRows().forEach(row => {
+            const metalRow = metalByName.get(row.metal);
+            if (!metalRow) return;
+
+            const oreRecord = findItemPrice([`${row.metal} Ore`]);
+            const itemRecord = findItemPrice([row.itemName]);
+            const orePurchase = exchangeBuyCost(oreRecord, 2);
+            const barsPerSmelt = yieldMultiplier('smelting');
+            const outputQuantity =
+                barsPerSmelt * row.outputPerBatch;
+            const itemSale = bestSaleValue(
+                itemRecord,
+                outputQuantity
+            );
+            const totalFee =
+                Number(metalRow.fee || 0) +
+                barsPerSmelt * Number(row.fee || 0);
+            const totalCycle =
+                metalRow.barCycle +
+                barsPerSmelt * row.cycle;
+
+            addOpportunity({
+                item: row.itemName,
+                type: 'Ammunition',
+                route:
+                    `Buy ${row.metal} Ore → Smelt Bars → ` +
+                    `Make ${row.shotType} → ` +
+                    `${itemSale.source || 'Unavailable'}`,
+                inputLabel: `2 ${row.metal} Ore`,
+                inputCost: orePurchase.value,
+                outputValue: itemSale.value,
+                saleSource: itemSale.source,
+                fee: totalFee,
+                cycle: totalCycle,
+                rawQuantity: 2,
+                outputQuantity,
+                inputPurchase: orePurchase,
+                outputSale: itemSale,
+                available: metalRow.canSmelt && row.canCraft
+            });
+        });
+
+        return opportunities.sort((a, b) =>
+            b.perHour - a.perHour ||
+            b.roi - a.roi ||
+            b.profit - a.profit
+        );
+    }
+
     function renderOverview() {
         const woodRows = calculateWoodRows();
         const metalRows = calculateMetalRows();
@@ -6878,14 +7607,19 @@
         const topHourly = [...opportunities]
             .filter(item => item.perHour > 0)
             .sort((a, b) => b.perHour - a.perHour)[0];
+        const showBuyCraftRecommendations = Boolean(
+            state.preferences?.showBuyCraftRecommendations
+        );
+        const buyCraftOpportunities = showBuyCraftRecommendations
+            ? calculateBuyAndCraftOpportunities(woodRows, metalRows)
+            : [];
+        const profitableBuyCraft = buyCraftOpportunities.filter(
+            item => item.profit > 0 && item.perHour > 0
+        );
+        const topBuyCraft = profitableBuyCraft[0] || null;
+        const queue = calculatePlannerQueue();
 
         scanXpRecipesFromPage();
-        const xpRows = calculateXpRows();
-        const bestXp = xpRows.find(
-            row => !state.excludeLockedCrafts || row.canMake
-        ) || xpRows[0] || null;
-
-        const queue = calculatePlannerQueue();
         const capturedCount = Object.keys(state.prices).length;
         const masteryLoaded =
             Number(state.masteryUpdatedAt || 0) > 0 &&
@@ -6981,14 +7715,18 @@
                 <div>
                     <div class="tqm-kicker">Quartermaster's Orders</div>
                     <h2>
-                        ${topValue
-                            ? `${escapeHtml(topValue.order)}: ${escapeHtml(topValue.item)}`
-                            : 'Capture Exchange prices to begin'}
+                        ${showBuyCraftRecommendations && topBuyCraft
+                            ? escapeHtml(topBuyCraft.route)
+                            : topValue
+                                ? `${escapeHtml(topValue.order)}: ${escapeHtml(topValue.item)}`
+                                : 'Capture Exchange prices to begin'}
                     </h2>
                     <p>
-                        ${topValue
-                            ? `Best sale value per gathered unit after all mastery yields: ${formatGold(topValue.value)}`
-                            : 'Open an Exchange category and press Read Exchange.'}
+                        ${showBuyCraftRecommendations && topBuyCraft
+                            ? `Best buy-and-craft net profit: ${moneyPerHour(topBuyCraft.perHour)} · ${signedMoney(topBuyCraft.profit)} per batch · ${formatPercent(topBuyCraft.roi)} ROI`
+                            : topValue
+                                ? `Best sale value per gathered unit after all mastery yields: ${formatGold(topValue.value)}`
+                                : 'Open an Exchange category and press Read Exchange.'}
                     </p>
                 </div>
             </section>
@@ -7016,11 +7754,25 @@
 
 
 
-                <article class="tqm-metric-card ${queue.rows.length ? 'tqm-state-warning' : 'tqm-state-muted'}">
-                    <span>Crafting Queue</span>
-                    <strong>${queue.rows.length.toLocaleString()} items</strong>
-                    <small>${formatSeconds(queue.totalSeconds)}</small>
-                </article>
+                ${showBuyCraftRecommendations
+                    ? `
+                        <article class="tqm-metric-card ${topBuyCraft ? 'tqm-state-positive' : 'tqm-state-warning'}">
+                            <span>Buy Mats & Craft</span>
+                            <strong>${topBuyCraft ? escapeHtml(topBuyCraft.item) : '—'}</strong>
+                            <small>
+                                ${topBuyCraft
+                                    ? `${moneyPerHour(topBuyCraft.perHour)} · ${formatPercent(topBuyCraft.roi)} ROI`
+                                    : 'No profitable routes'}
+                            </small>
+                        </article>
+                    `
+                    : `
+                        <article class="tqm-metric-card ${queue.rows.length ? 'tqm-state-warning' : 'tqm-state-muted'}">
+                            <span>Crafting Queue</span>
+                            <strong>${queue.rows.length.toLocaleString()} items</strong>
+                            <small>${formatSeconds(queue.totalSeconds)}</small>
+                        </article>
+                    `}
 
                 <article class="tqm-metric-card ${capturedCount ? 'tqm-state-positive' : 'tqm-state-warning'}">
                     <span>Market Data</span>
@@ -7050,6 +7802,23 @@
                     )}
                 </section>
             </div>
+
+            ${showBuyCraftRecommendations
+                ? `
+                    <section class="tqm-card">
+                        <h2>Top Buy-and-Craft Profit (g/hr)</h2>
+                        <p class="tqm-note">
+                            Buys raw materials from active Exchange sell listings,
+                            crafts with current mastery and city speed, then sells
+                            through the best active buy order or vendor. Exchange tax,
+                            crafting supply fees, and captured market depth are included.
+                            Open an item detail and press Read Exchange to capture its
+                            current order quantities.
+                        </p>
+                        ${renderBuyCraftRows(profitableBuyCraft.slice(0, 10))}
+                    </section>
+                `
+                : ''}
         `;
     }
 
@@ -7070,6 +7839,68 @@
                 </span>
             </div>
         `).join('');
+    }
+
+    function renderBuyCraftRows(items) {
+        if (!items.length) {
+            return `
+                <div class="tqm-empty">
+                    No profitable buy-and-craft routes are available at the
+                    currently captured prices.
+                </div>
+            `;
+        }
+
+        return items.map((item, index) => {
+            const hasQuoteCapacity = Number.isFinite(
+                item.quoteBatchCapacity
+            );
+            const rawUnitLabel = item.inputLabel.replace(
+                /^\d+(?:\.\d+)?\s+/,
+                ''
+            );
+            const displayedRawQuantity = Math.round(
+                item.rawAvailableAtQuote || 0
+            );
+            const displayedRawLabel =
+                displayedRawQuantity !== 1 && / Log$/i.test(rawUnitLabel)
+                    ? `${rawUnitLabel}s`
+                    : rawUnitLabel;
+            const capacityLine = hasQuoteCapacity
+                ? item.quoteLimitSide === 'output'
+                    ? `${Number(item.quoteBatchCapacity).toLocaleString()} batches at current buy-order depth · ${signedMoney(item.totalProfitAtQuote)} before the next bid level`
+                    : `${displayedRawQuantity.toLocaleString()} ${displayedRawLabel} available at ${formatGold(item.inputBestPrice, { allowZero: true })} · ${signedMoney(item.totalProfitAtQuote)} before the next ask level`
+                : 'Open the raw-material detail and press Read Exchange to capture quantity';
+            const tooltip = [
+                `Buy: ${item.inputLabel} for ${formatGold(item.inputCost, { allowZero: true })}`,
+                item.fee > 0
+                    ? `Crafting fee: ${formatGold(item.fee, { allowZero: true })}`
+                    : '',
+                `Sell: ${formatGold(item.outputValue, { allowZero: true })} through ${item.saleSource}`,
+                `Crafting time: ${formatCycleSeconds(item.cycle)}`
+            ].filter(Boolean).join('\n');
+
+            return `
+                <div class="tqm-rank-row tqm-buy-craft-row" title="${escapeHtml(tooltip)}">
+                    <span class="tqm-rank">${index + 1}</span>
+                    <span class="tqm-rank-name">
+                        <strong>${escapeHtml(item.item)}</strong>
+                        <small>
+                            ${escapeHtml(item.type)} ·
+                            ${escapeHtml(item.route)}
+                        </small>
+                    </span>
+                    <span class="tqm-rank-value tqm-buy-craft-value">
+                        <strong>${signedMoneyPerHour(item.perHour)}</strong>
+                        <small>
+                            ${signedMoney(item.profit)} / batch ·
+                            ${formatPercent(item.roi)} ROI
+                        </small>
+                        <small>${escapeHtml(capacityLine)}</small>
+                    </span>
+                </div>
+            `;
+        }).join('');
     }
 
     function craftProfitTooltip({
@@ -7947,6 +8778,83 @@
         return null;
     }
 
+    function masterySkillsForBuyCraftOpportunity(opportunity) {
+        const type = String(opportunity?.type || '');
+        const item = String(opportunity?.item || '');
+
+        if (type === 'Wood') {
+            return ['carpentry'];
+        }
+
+        if (type === 'Cooking') {
+            return ['cooking'];
+        }
+
+        if (type === 'Ammunition') {
+            return ['smelting', 'smithing'];
+        }
+
+        if (type === 'Metal') {
+            return /Nails$/i.test(item)
+                ? ['smelting', 'crafting']
+                : ['smelting'];
+        }
+
+        return [];
+    }
+
+    function summarizeBuyCraftMasteryOpportunities(opportunities) {
+        const profitable = (opportunities || [])
+            .filter(opportunity =>
+                Number.isFinite(Number(opportunity?.perHour)) &&
+                Number(opportunity.perHour) > 0
+            )
+            .sort((a, b) =>
+                Number(b.perHour || 0) - Number(a.perHour || 0) ||
+                Number(b.roi || 0) - Number(a.roi || 0)
+            );
+        const bySkill = new Map();
+
+        profitable.forEach(opportunity => {
+            masterySkillsForBuyCraftOpportunity(opportunity)
+                .forEach(skill => {
+                    if (bySkill.has(skill)) return;
+
+                    bySkill.set(skill, {
+                        item: opportunity.item,
+                        route: opportunity.route,
+                        value: Number(opportunity.perHour || 0),
+                        roi: Number(opportunity.roi || 0),
+                        profit: Number(opportunity.profit || 0),
+                        inputCost: Number(opportunity.inputCost || 0),
+                        outputValue: Number(opportunity.outputValue || 0),
+                        fee: Number(opportunity.fee || 0),
+                        masteries:
+                            masterySkillsForBuyCraftOpportunity(opportunity),
+                        saleSource: opportunity.saleSource || ''
+                    });
+                });
+        });
+
+        const top = profitable[0]
+            ? {
+                item: profitable[0].item,
+                route: profitable[0].route,
+                value: Number(profitable[0].perHour || 0),
+                roi: Number(profitable[0].roi || 0),
+                profit: Number(profitable[0].profit || 0),
+                inputCost: Number(profitable[0].inputCost || 0),
+                outputValue: Number(profitable[0].outputValue || 0),
+                fee: Number(profitable[0].fee || 0),
+                masteries:
+                    masterySkillsForBuyCraftOpportunity(profitable[0]),
+                saleSource: profitable[0].saleSource || ''
+            }
+            : null;
+
+        return { top, bySkill };
+    }
+
     function withTemporaryMasteryAllocations(
         allocations,
         callback
@@ -8009,6 +8917,14 @@
     function calculateMasterySimulation() {
         const allocations = masterySimulatorAllocations();
         const currentShip = calculateShipBuild();
+        const buyCraftEnabled = Boolean(
+            state.preferences?.showBuyCraftRecommendations
+        );
+        const currentBuyCraftSummary = buyCraftEnabled
+            ? summarizeBuyCraftMasteryOpportunities(
+                calculateBuyAndCraftOpportunities()
+            )
+            : { top: null, bySkill: new Map() };
 
         const currentRows = SIMULATED_MASTERY_SKILLS.map(skill => ({
             skill,
@@ -8026,22 +8942,35 @@
                     experienceMasteryPoints(skill)
                 ),
             currentGold:
-                bestMasteryOpportunity(skill)
+                bestMasteryOpportunity(skill),
+            currentBuyCraftGold:
+                currentBuyCraftSummary.bySkill.get(skill) || null
         }));
 
         const simulated = withTemporaryMasteryAllocations(
             allocations,
-            () => ({
-                ship: calculateShipBuild(),
-                rows: SIMULATED_MASTERY_SKILLS.map(skill => ({
-                    skill,
-                    xp: bestMasteryXpOpportunity(
+            () => {
+                const buyCraftSummary = buyCraftEnabled
+                    ? summarizeBuyCraftMasteryOpportunities(
+                        calculateBuyAndCraftOpportunities()
+                    )
+                    : { top: null, bySkill: new Map() };
+
+                return {
+                    ship: calculateShipBuild(),
+                    buyCraftSummary,
+                    rows: SIMULATED_MASTERY_SKILLS.map(skill => ({
                         skill,
-                        allocations[skill].experiencePoints
-                    ),
-                    gold: bestMasteryOpportunity(skill)
-                }))
-            })
+                        xp: bestMasteryXpOpportunity(
+                            skill,
+                            allocations[skill].experiencePoints
+                        ),
+                        gold: bestMasteryOpportunity(skill),
+                        buyCraftGold:
+                            buyCraftSummary.bySkill.get(skill) || null
+                    }))
+                };
+            }
         );
 
         const simulatedBySkill = new Map(
@@ -8055,9 +8984,16 @@
             return {
                 ...row,
                 simulatedXp: simulatedRow.xp || null,
-                simulatedGold: simulatedRow.gold || null
+                simulatedGold: simulatedRow.gold || null,
+                simulatedBuyCraftGold:
+                    simulatedRow.buyCraftGold || null
             };
         });
+
+        const buyCraftRows = rows.filter(row =>
+            ['carpentry', 'smelting', 'crafting', 'cooking', 'smithing']
+                .includes(row.skill)
+        );
 
         const investedPoints = Object.values(allocations)
             .reduce(
@@ -8071,6 +9007,10 @@
         return {
             allocations,
             rows,
+            buyCraftEnabled,
+            buyCraftRows,
+            currentBuyCraftTop: currentBuyCraftSummary.top,
+            simulatedBuyCraftTop: simulated.buyCraftSummary.top,
             investedPoints,
             currentShip,
             simulatedShip: simulated.ship,
@@ -8111,6 +9051,9 @@
                             Adjust multiple professions at the same time.
                             Experience adds +1 XP per action per point.
                             Yield adds +20% output per point.
+                            ${result.buyCraftEnabled
+                                ? 'Purchased-material net profit is included below.'
+                                : ''}
                         </p>
                     </div>
 
@@ -8242,6 +9185,144 @@
                 <h2>Combined Comparison</h2>
 
                 <div class="tqm-comparison-stack">
+                    ${result.buyCraftEnabled ? `
+                        <section class="tqm-comparison-block">
+                            <div class="tqm-section-heading-row">
+                                <div>
+                                    <h3>Buy Mats &amp; Craft Net Profit</h3>
+                                    <p class="tqm-note">
+                                        Buys raw materials from active Exchange
+                                        sell listings and sells finished goods to
+                                        the best active buy order or vendor.
+                                    </p>
+                                </div>
+
+                                <div class="tqm-best-port-badge">
+                                    <span>Best Simulated Route</span>
+                                    <strong>
+                                        ${escapeHtml(
+                                            result.simulatedBuyCraftTop
+                                                ? `${result.simulatedBuyCraftTop.masteries
+                                                    .map(masterySkillLabel)
+                                                    .join(' + ')} · ${result.simulatedBuyCraftTop.item}`
+                                                : 'No profitable route'
+                                        )}
+                                    </strong>
+                                    <small>
+                                        ${result.simulatedBuyCraftTop
+                                            ? moneyPerHour(
+                                                result.simulatedBuyCraftTop.value
+                                            )
+                                            : '—'}
+                                    </small>
+                                </div>
+                            </div>
+
+                            <div class="tqm-table-wrap">
+                                <table class="tqm-table tqm-table-compact">
+                                    <thead>
+                                        <tr>
+                                            <th>Mastery</th>
+                                            <th>Current Yield</th>
+                                            <th>Current Best Net / HR</th>
+                                            <th>Current Route</th>
+                                            <th>Simulated Yield</th>
+                                            <th>Simulated Best Net / HR</th>
+                                            <th>Simulated Route</th>
+                                            <th>Change</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        ${result.buyCraftRows.map(row => {
+                                            const current =
+                                                row.currentBuyCraftGold;
+                                            const simulated =
+                                                row.simulatedBuyCraftGold;
+                                            const change =
+                                                Number(simulated?.value || 0) -
+                                                Number(current?.value || 0);
+
+                                            return `
+                                                <tr>
+                                                    <td>
+                                                        <strong>
+                                                            ${escapeHtml(
+                                                                masterySkillLabel(
+                                                                    row.skill
+                                                                )
+                                                            )}
+                                                        </strong>
+                                                    </td>
+                                                    <td>
+                                                        +${row.currentYield * 20}%
+                                                    </td>
+                                                    <td>
+                                                        ${current
+                                                            ? `${moneyPerHour(
+                                                                current.value
+                                                            )} · ${formatPercent(
+                                                                current.roi
+                                                            )} ROI`
+                                                            : '—'}
+                                                    </td>
+                                                    <td class="tqm-reference-item">
+                                                        ${current
+                                                            ? `<strong>${escapeHtml(
+                                                                current.item
+                                                            )}</strong><small>${escapeHtml(
+                                                                current.route
+                                                            )}</small><small>Buy ${formatGold(
+                                                                current.inputCost,
+                                                                { allowZero: true }
+                                                            )} · Sell ${formatGold(
+                                                                current.outputValue,
+                                                                { allowZero: true }
+                                                            )}</small>`
+                                                            : '—'}
+                                                    </td>
+                                                    <td>
+                                                        +${row.simulatedYield * 20}%
+                                                    </td>
+                                                    <td class="tqm-profit-positive">
+                                                        ${simulated
+                                                            ? `${moneyPerHour(
+                                                                simulated.value
+                                                            )} · ${formatPercent(
+                                                                simulated.roi
+                                                            )} ROI`
+                                                            : '—'}
+                                                    </td>
+                                                    <td class="tqm-reference-item">
+                                                        ${simulated
+                                                            ? `<strong>${escapeHtml(
+                                                                simulated.item
+                                                            )}</strong><small>${escapeHtml(
+                                                                simulated.route
+                                                            )}</small><small>Buy ${formatGold(
+                                                                simulated.inputCost,
+                                                                { allowZero: true }
+                                                            )} · Sell ${formatGold(
+                                                                simulated.outputValue,
+                                                                { allowZero: true }
+                                                            )}</small>`
+                                                            : '—'}
+                                                    </td>
+                                                    <td class="${
+                                                        change >= 0
+                                                            ? 'tqm-profit-positive'
+                                                            : 'tqm-profit-negative'
+                                                    }">
+                                                        ${signedMoneyPerHour(change)}
+                                                    </td>
+                                                </tr>
+                                            `;
+                                        }).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </section>
+                    ` : ''}
+
                     <section class="tqm-comparison-block">
                         <h3>Gold Comparison</h3>
 
@@ -8717,6 +9798,23 @@
                             Clear Exchange Cache
                         </button>
                     </div>
+                </section>
+
+                <section class="tqm-card">
+                    <h2>Overview Recommendations</h2>
+                    <p class="tqm-note tqm-compact-note">
+                        Enable purchased-material profit rankings for players who
+                        buy raw materials and craft them for resale. This controls
+                        both the Overview rankings and the Mastery Simulator's
+                        buy-and-craft net-profit comparison. When disabled, the
+                        Overview shows the original Crafting Queue card.
+                    </p>
+
+                    <label class="tqm-checkbox-row">
+                        <input id="tqm-pref-buy-craft" type="checkbox"
+                            ${preferences.showBuyCraftRecommendations ? 'checked' : ''}>
+                        <span>Show Buy Mats &amp; Craft recommendations</span>
+                    </label>
                 </section>
 
                 <section class="tqm-card">
@@ -9810,9 +10908,15 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
         document.querySelector('#tqm-settings-read-exchange')
             ?.addEventListener('click', () => {
                 const captured = scanVisibleExchange({
-                    includeVendorDetail: false
+                    includeVendorDetail: true
                 });
-                showToast(`Captured ${captured} visible Exchange rows.`);
+                const detailMessage = state.vendorDebug?.saved
+                    ? ` ${state.vendorDebug.status}.`
+                    : '';
+
+                showToast(
+                    `Captured ${captured} visible Exchange rows.${detailMessage}`
+                );
                 renderActiveTab('mastery');
             });
 
@@ -9857,6 +10961,7 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
             ['#tqm-pref-raw-materials', 'showRawMaterials'],
             ['#tqm-pref-intermediate-materials', 'showIntermediateMaterials'],
             ['#tqm-pref-ship-progress', 'showShipProgress'],
+            ['#tqm-pref-buy-craft', 'showBuyCraftRecommendations'],
             ['#tqm-pref-compact', 'compactMode']
         ].forEach(([selector, key]) => {
             document.querySelector(selector)?.addEventListener(
@@ -10411,12 +11516,20 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
                     ?.dataset.tqmTab ||
                 'overview';
 
+            /*
+             * Read both the summary table and the currently open item detail.
+             * The previous test build explicitly disabled detail scanning here,
+             * so order-book quantity could never be saved from this button.
+             */
             const captured = scanVisibleExchange({
-                includeVendorDetail: false
+                includeVendorDetail: true
             });
+            const detailMessage = state.vendorDebug?.saved
+                ? ` ${state.vendorDebug.status}.`
+                : '';
 
             showToast(
-                `Captured ${captured} visible Exchange rows.`
+                `Captured ${captured} visible Exchange rows.${detailMessage}`
             );
             renderActiveTab(activeTab);
         });
@@ -12732,6 +13845,36 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
         .tqm-rank-value {
             color: #f0c45c;
             font-weight: 800;
+        }
+
+        .tqm-buy-craft-value {
+            display: grid;
+            justify-items: end;
+            gap: 2px;
+            text-align: right;
+        }
+
+        .tqm-buy-craft-value small {
+            color: rgba(232, 224, 208, .48);
+            font-size: 10px;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+
+        @media (max-width: 720px) {
+            .tqm-buy-craft-row {
+                grid-template-columns: 24px minmax(0, 1fr);
+            }
+
+            .tqm-buy-craft-row .tqm-buy-craft-value {
+                grid-column: 2;
+                justify-items: start;
+                text-align: left;
+            }
+
+            .tqm-buy-craft-value small {
+                white-space: normal;
+            }
         }
 
         .tqm-summary {
