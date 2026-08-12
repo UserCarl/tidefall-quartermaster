@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tidefall Quartermaster
 // @namespace    tidefall-quartermaster
-// @version      1.0.20
+// @version      1.0.20.1
 // @description  Standalone Exchange reader and mastery-aware profit advisor for Tidefall
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=playtidefall.com
 // @updateURL    https://raw.githubusercontent.com/UserCarl/tidefall-quartermaster/main/Tidefall_Quartermaster.user.js
@@ -13,8 +13,8 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.0.20';
-    const BUILD_ID = '2026-08-06-official-buy-craft';
+    const VERSION = '1.0.20.1';
+    const BUILD_ID = '2026-08-12-performance-fix';
     const STORAGE_KEY = 'tf-quartermaster-v1';
     const BUTTON_ID = 'tf-quartermaster-button';
     const VENDOR_BUTTON_ID = 'tf-quartermaster-vendor-button';
@@ -2368,16 +2368,40 @@
         const count = Object.keys(found).length;
         if (!count) return 0;
 
+        const nextMastery = {};
+        let changed = false;
+
         MASTERY_SKILLS.forEach(skill => {
-            state.mastery[skill] = found[skill] || {
+            const next = found[skill] || {
                 experience: 0,
                 yield: 0
             };
+            const current = state.mastery?.[skill] || {
+                experience: 0,
+                yield: 0
+            };
+
+            nextMastery[skill] = next;
+
+            if (
+                Number(current.experience || 0) !==
+                    Number(next.experience || 0) ||
+                Number(current.yield || 0) !==
+                    Number(next.yield || 0)
+            ) {
+                changed = true;
+            }
         });
 
-        state.masteryUpdatedAt = Date.now();
-        saveState();
-        updateHeaderMasteryDisplay();
+        if (changed) {
+            MASTERY_SKILLS.forEach(skill => {
+                state.mastery[skill] = nextMastery[skill];
+            });
+
+            state.masteryUpdatedAt = Date.now();
+            saveState();
+            updateHeaderMasteryDisplay();
+        }
 
         return count;
     }
@@ -2463,6 +2487,7 @@
         }
 
         const found = {};
+        const foundProgress = {};
 
         cards.forEach(card => {
             if (!(card instanceof HTMLElement)) return;
@@ -2497,10 +2522,9 @@
             );
 
             if (xpMatch) {
-                state.skillProgress[skill] = {
+                foundProgress[skill] = {
                     currentXp: numberFromText(xpMatch[1]),
-                    requiredXp: numberFromText(xpMatch[2]),
-                    updatedAt: Date.now()
+                    requiredXp: numberFromText(xpMatch[2])
                 };
             }
         });
@@ -2511,11 +2535,42 @@
             return 0;
         }
 
+        let changed = false;
+
         Object.entries(found).forEach(([skill, level]) => {
-            state.skillLevels[skill] = level;
+            if (Number(state.skillLevels?.[skill] || 0) !== Number(level)) {
+                changed = true;
+            }
         });
 
-        saveState();
+        Object.entries(foundProgress).forEach(([skill, progress]) => {
+            const current = state.skillProgress?.[skill] || {};
+
+            if (
+                Number(current.currentXp || 0) !==
+                    Number(progress.currentXp || 0) ||
+                Number(current.requiredXp || 0) !==
+                    Number(progress.requiredXp || 0)
+            ) {
+                changed = true;
+            }
+        });
+
+        if (changed) {
+            Object.entries(found).forEach(([skill, level]) => {
+                state.skillLevels[skill] = level;
+            });
+
+            Object.entries(foundProgress).forEach(([skill, progress]) => {
+                state.skillProgress[skill] = {
+                    ...progress,
+                    updatedAt: Date.now()
+                };
+            });
+
+            saveState();
+        }
+
         return count;
     }
 
@@ -7619,7 +7674,6 @@
         const topBuyCraft = profitableBuyCraft[0] || null;
         const queue = calculatePlannerQueue();
 
-        scanXpRecipesFromPage();
         const capturedCount = Object.keys(state.prices).length;
         const masteryLoaded =
             Number(state.masteryUpdatedAt || 0) > 0 &&
@@ -11075,6 +11129,7 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
                 saveState();
                 syncDeveloperTab();
                 syncVendorReadButton();
+                syncVendorDetailObserver();
 
                 showToast(
                     state.developerMode
@@ -14500,18 +14555,13 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
     createHeaderButton();
     createJournal();
 
-    const headerObserver = new MutationObserver(() => {
-        if (!document.getElementById(BUTTON_ID)) {
-            createHeaderButton();
-        }
-
-        syncVendorReadButton();
-    });
-
-    headerObserver.observe(document.documentElement, {
-        childList: true,
-        subtree: true
-    });
+    /*
+     * Performance note:
+     * Quartermaster previously ran city, mastery, skill, XP, inventory,
+     * button maintenance, and vendor-button maintenance together every
+     * 1000 ms. The synchronized work was visible as a regular game hitch.
+     * Keep reactive work narrow and stagger slow fallbacks instead.
+     */
 
     const cityObserver = new MutationObserver(() => {
         const changed = autoDetectCurrentCity();
@@ -14527,14 +14577,25 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
         }
     });
 
+    let observedCityButton = null;
+
     const observeCitySidebar = () => {
         const cityButton = document.querySelector('#city-nav-btn');
 
-        if (!cityButton || cityButton.dataset.tqmCityObserved === 'true') {
+        if (!cityButton) {
+            if (observedCityButton) {
+                cityObserver.disconnect();
+                observedCityButton = null;
+            }
             return;
         }
 
-        cityButton.dataset.tqmCityObserved = 'true';
+        if (cityButton === observedCityButton) {
+            return;
+        }
+
+        cityObserver.disconnect();
+        observedCityButton = cityButton;
 
         cityObserver.observe(cityButton, {
             childList: true,
@@ -14588,46 +14649,69 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
                     `Vendor price captured. ${after} total vendor prices saved.`
                 );
             }
-        }, 80);
+        }, 100);
     };
 
-    const vendorDetailObserver = new MutationObserver(
-        captureOpenVendorDetail
-    );
+    let vendorDetailObserver = null;
 
-    vendorDetailObserver.observe(document.documentElement, {
-        childList: true,
-        subtree: true,
-        characterData: true
-    });
+    function syncVendorDetailObserver() {
+        if (state.developerMode) {
+            if (vendorDetailObserver) return;
 
-    captureOpenVendorDetail();
+            vendorDetailObserver = new MutationObserver(
+                captureOpenVendorDetail
+            );
 
-    const sidebarObserver = new MutationObserver(observeCitySidebar);
-    sidebarObserver.observe(document.documentElement, {
-        childList: true,
-        subtree: true
-    });
+            vendorDetailObserver.observe(document.documentElement, {
+                childList: true,
+                subtree: true,
+                characterData: true
+            });
 
-    setInterval(() => {
+            captureOpenVendorDetail();
+            return;
+        }
+
+        if (vendorDetailObserver) {
+            vendorDetailObserver.disconnect();
+            vendorDetailObserver = null;
+        }
+
+        window.clearTimeout(vendorScanTimer);
+    }
+
+    syncVendorDetailObserver();
+
+    const refreshOpenShipTabIfNeeded = inventoryUpdated => {
+        if (!inventoryUpdated) return;
+
+        const overlay = document.getElementById(OVERLAY_ID);
+        const activeTab = overlay
+            ?.querySelector('[data-tqm-tab].tqm-active')
+            ?.dataset.tqmTab;
+
+        if (
+            overlay?.classList.contains('tqm-open') &&
+            activeTab === 'ship'
+        ) {
+            renderActiveTab('ship');
+        }
+    };
+
+    const runInventoryFallback = () => {
+        if (!state.preferences?.autoRefreshInventory) return;
+
+        refreshOpenShipTabIfNeeded(
+            scanGameInventory()
+        );
+    };
+
+    const runPassiveDataFallback = () => {
         const cityChanged = autoDetectCurrentCity();
         scanMasteryFromPage();
         scanSkillLevelsFromPage();
-        scanXpRecipesFromPage();
-
-        const inventoryUpdated =
-            state.preferences?.autoRefreshInventory
-                ? scanGameInventory()
-                : false;
 
         if (
-            inventoryUpdated &&
-            document.getElementById(OVERLAY_ID)?.classList.contains('tqm-open') &&
-            document.querySelector('[data-tqm-tab].tqm-active')
-                ?.dataset.tqmTab === 'ship'
-        ) {
-            renderActiveTab('ship');
-        } else if (
             cityChanged &&
             document.getElementById(OVERLAY_ID)?.classList.contains('tqm-open')
         ) {
@@ -14636,15 +14720,39 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
                     ?.dataset.tqmTab || 'overview'
             );
         }
+    };
 
+    const runUiMaintenance = () => {
         const button = document.getElementById(BUTTON_ID);
 
         if (!button || !button.isConnected) {
             createHeaderButton();
         }
 
+        observeCitySidebar();
         syncVendorReadButton();
-    }, 1000);
+        syncVendorDetailObserver();
+    };
+
+    /*
+     * Stagger the fallbacks so they do not all wake up on the same frame.
+     * XP recipe discovery is intentionally not periodic anymore; it still
+     * runs when Quartermaster opens and when Read XP is pressed.
+     */
+    window.setTimeout(() => {
+        runInventoryFallback();
+        window.setInterval(runInventoryFallback, 3000);
+    }, 900);
+
+    window.setTimeout(() => {
+        runUiMaintenance();
+        window.setInterval(runUiMaintenance, 4000);
+    }, 1900);
+
+    window.setTimeout(() => {
+        runPassiveDataFallback();
+        window.setInterval(runPassiveDataFallback, 7000);
+    }, 3300);
 
     console.info(
         `[Tidefall Quartermaster] Loaded v${VERSION} (${BUILD_ID})`
