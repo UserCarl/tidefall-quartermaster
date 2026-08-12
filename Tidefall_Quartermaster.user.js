@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tidefall Quartermaster
 // @namespace    tidefall-quartermaster
-// @version      1.0.20.6
+// @version      1.0.21.0
 // @description  Standalone Exchange reader and mastery-aware profit advisor for Tidefall
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=playtidefall.com
 // @updateURL    https://raw.githubusercontent.com/UserCarl/tidefall-quartermaster/main/Tidefall_Quartermaster.user.js
@@ -13,8 +13,8 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.0.20.6';
-    const BUILD_ID = '2026-08-12-grouped-smithing-shots';
+    const VERSION = '1.0.21.0';
+    const BUILD_ID = '2026-08-12-skill-economy-official';
     const STORAGE_KEY = 'tf-quartermaster-v1';
     const BUTTON_ID = 'tf-quartermaster-button';
     const VENDOR_BUTTON_ID = 'tf-quartermaster-vendor-button';
@@ -145,7 +145,17 @@
             showIntermediateMaterials: true,
             showShipProgress: true,
             autoRefreshInventory: true,
-            showBuyCraftRecommendations: false
+            showBuyCraftRecommendations: false,
+
+            // Economy / inspector feature controls
+            itemInspectorEnabled: true,
+            showPriceFreshness: true,
+            pinnedComparisonEnabled: true,
+            showInspectorCraftCapacity: true,
+            showLockedSkillRows: true,
+
+            // Developer-only diagnostics
+            showCalculationSourceIndicators: false
         },
         masteryUpdatedAt: 0,
         updatedAt: 0
@@ -4233,6 +4243,387 @@
             : action;
     }
 
+
+    function economySkillLockState(skill, requiredLevel) {
+        const level = Number(state.skillLevels?.[skill] || 0);
+        const known = Number.isFinite(level) && level > 0;
+        const required = Math.max(1, Number(requiredLevel) || 1);
+
+        return {
+            known,
+            level: known ? level : 0,
+            requiredLevel: required,
+            locked: known && level < required
+        };
+    }
+
+    function sharedPriceRecord(itemName) {
+        const normalized = normalizeName(itemName);
+        if (!normalized) return null;
+
+        const names = [normalized];
+
+        if (normalized.endsWith('s')) {
+            names.push(normalized.slice(0, -1));
+        } else {
+            names.push(`${normalized}s`);
+        }
+
+        return findItemPrice(names);
+    }
+
+    function liveMarketTimestamp(record) {
+        if (!record) return 0;
+
+        const hasMarketData =
+            Number(record.ask || 0) > 0 ||
+            Number(record.bid || 0) > 0 ||
+            Number(record.lastSold || 0) > 0 ||
+            Number(record.recentTradeMedian || 0) > 0 ||
+            (Array.isArray(record.askDepth) && record.askDepth.length > 0) ||
+            (Array.isArray(record.bidDepth) && record.bidDepth.length > 0);
+
+        if (!hasMarketData) return 0;
+
+        return Math.max(
+            Number(record.depthCapturedAt || 0),
+            Number(record.capturedAt || 0)
+        );
+    }
+
+    function priceFreshnessInfo(records) {
+        const list = (Array.isArray(records) ? records : [records])
+            .filter(Boolean);
+        const timestamps = list
+            .map(liveMarketTimestamp)
+            .filter(timestamp => timestamp > 0);
+
+        if (!timestamps.length) {
+            return {
+                label: 'Vendor only',
+                stale: false,
+                className: 'tqm-freshness-fallback',
+                timestamp: 0
+            };
+        }
+
+        /*
+         * Use the oldest live quote involved in the calculation so mixed
+         * fresh/stale inputs are reported conservatively.
+         */
+        const timestamp = Math.min(...timestamps);
+        const ageMs = Math.max(0, Date.now() - timestamp);
+        const ageSeconds = Math.floor(ageMs / 1000);
+        let label = 'Just now';
+
+        if (ageSeconds >= 86400) {
+            label = `${Math.floor(ageSeconds / 86400)}d ago`;
+        } else if (ageSeconds >= 3600) {
+            label = `${Math.floor(ageSeconds / 3600)}h ago`;
+        } else if (ageSeconds >= 60) {
+            label = `${Math.floor(ageSeconds / 60)}m ago`;
+        } else if (ageSeconds >= 10) {
+            label = `${ageSeconds}s ago`;
+        }
+
+        const stale = ageMs >= 30 * 60 * 1000;
+
+        return {
+            label,
+            stale,
+            className: stale
+                ? 'tqm-freshness-stale'
+                : 'tqm-freshness-fresh',
+            timestamp
+        };
+    }
+
+    function calculationSourceIndicator({
+        source = '',
+        recordOrRecords = null,
+        skill = '',
+        includeInventory = false,
+        includeRecipe = true
+    } = {}) {
+        const preferences = {
+            ...DEFAULT_STATE.preferences,
+            ...(state.preferences || {})
+        };
+
+        if (
+            !state.developerMode ||
+            !preferences.showCalculationSourceIndicators
+        ) {
+            return '';
+        }
+
+        const freshness =
+            recordOrRecords &&
+            typeof recordOrRecords === 'object' &&
+            !Array.isArray(recordOrRecords) &&
+            typeof recordOrRecords.label === 'string' &&
+            typeof recordOrRecords.className === 'string'
+                ? recordOrRecords
+                : priceFreshnessInfo(recordOrRecords);
+
+        const badges = [];
+        const sourceText = String(source || '');
+
+        if (freshness.timestamp > 0) {
+            badges.push(
+                freshness.stale
+                    ? ['⚠', 'Market stale', 'tqm-source-warning']
+                    : ['✓', 'Live Market', 'tqm-source-ok']
+            );
+        }
+
+        if (
+            /vendor/i.test(sourceText) ||
+            freshness.timestamp <= 0
+        ) {
+            badges.push(['✓', 'Vendor', 'tqm-source-ok']);
+        }
+
+        if (includeInventory) {
+            badges.push(['✓', 'Inventory', 'tqm-source-ok']);
+        }
+
+        if (skill) {
+            badges.push(['✓', 'Mastery', 'tqm-source-ok']);
+
+            const cityBonus =
+                Number(CITY_BONUSES?.[state.currentCity]?.[skill] || 0);
+
+            if (cityBonus > 0 && state.currentCity !== 'None') {
+                badges.push([
+                    '✓',
+                    state.currentCity,
+                    'tqm-source-ok'
+                ]);
+            }
+        }
+
+        if (includeRecipe) {
+            badges.push(['✓', 'Recipe DB', 'tqm-source-ok']);
+        }
+
+        return `
+            <small class="tqm-calc-source-indicator">
+                ${badges.map(([icon, label, className]) => `
+                    <span class="${className}">
+                        ${icon} ${escapeHtml(label)}
+                    </span>
+                `).join('')}
+            </small>
+        `;
+    }
+
+    function renderPriceSource(
+        source,
+        recordOrRecords,
+        context = {}
+    ) {
+        const preferences = {
+            ...DEFAULT_STATE.preferences,
+            ...(state.preferences || {})
+        };
+        const freshness =
+            recordOrRecords &&
+            typeof recordOrRecords === 'object' &&
+            !Array.isArray(recordOrRecords) &&
+            typeof recordOrRecords.label === 'string' &&
+            typeof recordOrRecords.className === 'string'
+                ? recordOrRecords
+                : priceFreshnessInfo(recordOrRecords);
+
+        return `
+            <span>${escapeHtml(source || 'N/A')}</span>
+            ${preferences.showPriceFreshness ? `
+                <small class="tqm-price-freshness ${freshness.className}">
+                    ${escapeHtml(freshness.label)}
+                </small>
+            ` : ''}
+            ${calculationSourceIndicator({
+                source,
+                recordOrRecords: freshness,
+                skill: context.skill || '',
+                includeInventory: Boolean(context.includeInventory),
+                includeRecipe:
+                    context.includeRecipe === undefined
+                        ? true
+                        : Boolean(context.includeRecipe)
+            })}
+        `;
+    }
+
+
+    /*
+     * Shared action-profit engine for Quartermaster's skill tabs and Ctrl
+     * inspector. The recipe chooses whether consumed materials use purchase
+     * cost or immediate-sale opportunity cost, while tax, depth, yield,
+     * current-city speed, supply fees, inventory capacity, and sale value all
+     * come through the same path.
+     */
+    function calculateSharedCraftProfit(recipe, options = {}) {
+        if (!recipe) return null;
+
+        const inputMode =
+            options.inputMode ||
+            recipe.inputMode ||
+            'purchase';
+        const outputPerBatch = Math.max(
+            0.0001,
+            Number(recipe.outputPerBatch || 1)
+        );
+        const cycle = adjustedCraftTime(
+            Number(recipe.baseCycle || 0),
+            recipe.skill
+        );
+        const fee = Number(recipe.fee || 0);
+
+        const ingredients = (recipe.ingredients || []).map(ingredient => {
+            const quantity = Math.max(
+                0,
+                Number(ingredient.quantity || 0)
+            );
+            const record = sharedPriceRecord(ingredient.name);
+            const costResult = inputMode === 'opportunity'
+                ? bestAvailableSaleValue(record, quantity)
+                : resolveCraftInputCost(record, quantity);
+            const owned = inventoryQuantityForItem(
+                ingredient.name
+            );
+
+            return {
+                name: ingredient.name,
+                quantity,
+                record,
+                owned,
+                value: Number(costResult.value),
+                source: costResult.source || 'Unavailable',
+                costResult,
+                missingForNextAction: Math.max(
+                    0,
+                    quantity - owned
+                )
+            };
+        });
+
+        const allInputsKnown = ingredients.every(
+            ingredient => Number.isFinite(ingredient.value)
+        );
+        const inputCost = allInputsKnown
+            ? ingredients.reduce(
+                (sum, ingredient) =>
+                    sum + Number(ingredient.value || 0),
+                0
+            )
+            : NaN;
+        const batchCost = Number.isFinite(inputCost)
+            ? inputCost + fee
+            : NaN;
+        const costPerItem = Number.isFinite(batchCost)
+            ? batchCost / outputPerBatch
+            : NaN;
+
+        const outputRecord = sharedPriceRecord(recipe.name);
+        const outputSale = bestAvailableSaleValue(
+            outputRecord,
+            outputPerBatch
+        );
+        const outputValue = Number(outputSale.value);
+        const profitPerAction =
+            Number.isFinite(outputValue) &&
+            Number.isFinite(batchCost)
+                ? outputValue - batchCost
+                : NaN;
+        const profitPerItem = Number.isFinite(profitPerAction)
+            ? profitPerAction / outputPerBatch
+            : NaN;
+        const profitPerHour =
+            Number.isFinite(profitPerAction) &&
+            cycle > 0
+                ? goldPerHour(profitPerAction, cycle)
+                : NaN;
+
+        const ask = Number(outputRecord?.ask || 0);
+        const listNetPerItem = ask > 0
+            ? netPrice(ask)
+            : NaN;
+        const askProfitPerItem =
+            Number.isFinite(listNetPerItem) &&
+            Number.isFinite(costPerItem)
+                ? listNetPerItem - costPerItem
+                : NaN;
+        const askProfitPerHour =
+            Number.isFinite(askProfitPerItem) &&
+            cycle > 0
+                ? goldPerHour(
+                    askProfitPerItem * outputPerBatch,
+                    cycle
+                )
+                : NaN;
+
+        const actionLimits = ingredients
+            .filter(ingredient => ingredient.quantity > 0)
+            .map(ingredient =>
+                Math.floor(
+                    Number(ingredient.owned || 0) /
+                    ingredient.quantity
+                )
+            );
+        const maxActions = actionLimits.length
+            ? Math.max(0, Math.min(...actionLimits))
+            : 0;
+        const maxCraftable =
+            maxActions * outputPerBatch;
+        const missingMaterials = ingredients.filter(
+            ingredient => ingredient.missingForNextAction > 0
+        );
+        const lock = economySkillLockState(
+            recipe.skill,
+            recipe.requiredLevel
+        );
+        const freshness = priceFreshnessInfo([
+            outputRecord,
+            ...ingredients.map(ingredient => ingredient.record)
+        ]);
+
+        return {
+            recipe,
+            inputMode,
+            outputPerBatch,
+            cycle,
+            fee,
+            ingredients,
+            inputCost,
+            batchCost,
+            costPerItem,
+            outputRecord,
+            outputSale,
+            outputValue,
+            ask,
+            listNetPerItem,
+            instantNetPerItem:
+                Number.isFinite(outputValue)
+                    ? outputValue / outputPerBatch
+                    : NaN,
+            instantSource:
+                outputSale.source || 'Unavailable',
+            profitPerAction,
+            profitPerItem,
+            profitPerHour,
+            askProfitPerItem,
+            askProfitPerHour,
+            maxActions,
+            maxCraftable,
+            missingMaterials,
+            lock,
+            locked: lock.locked,
+            freshness
+        };
+    }
+
     function calculateWoodRows() {
         const carpentry = yieldMultiplier('carpentry');
 
@@ -4313,45 +4704,75 @@
              * could be sold for immediately, not by a potentially misleading
              * lowest sell listing.
              */
-            const plankInput = bestAvailableSaleValue(
-                logRecord,
-                1
+            const requiredLevel = WOOD_REQUIRED_LEVELS[wood] || 1;
+            const plankShared = calculateSharedCraftProfit(
+                {
+                    name: `${wood} Plank`,
+                    skill: 'carpentry',
+                    requiredLevel,
+                    ingredients: [
+                        {
+                            name: `${wood} Log`,
+                            quantity: 1
+                        }
+                    ],
+                    outputPerBatch: carpentry,
+                    baseCycle:
+                        WOOD_CRAFT_TIMES[wood]?.plank || 0,
+                    fee: 0,
+                    inputMode: 'opportunity'
+                }
             );
-            const plankInputCost = plankInput.value;
-            const plankActionSale = bestAvailableSaleValue(
-                plankRecord,
-                carpentry
-            );
-            const plankOutputValue = plankActionSale.value;
-            const plankActionProfit =
-                Number.isFinite(plankInputCost) &&
-                Number.isFinite(plankOutputValue)
-                    ? plankOutputValue - plankInputCost
-                    : NaN;
-            const plankActionProfitHour = goldPerHour(
-                plankActionProfit,
-                plankCycle
+            const beamShared = calculateSharedCraftProfit(
+                {
+                    name: `${wood} Beam`,
+                    skill: 'carpentry',
+                    requiredLevel,
+                    ingredients: [
+                        {
+                            name: `${wood} Plank`,
+                            quantity: 2
+                        }
+                    ],
+                    outputPerBatch: carpentry,
+                    baseCycle:
+                        WOOD_CRAFT_TIMES[wood]?.beam || 0,
+                    fee: 0,
+                    inputMode: 'opportunity'
+                }
             );
 
-            const beamInput = bestAvailableSaleValue(
-                plankRecord,
-                2
-            );
-            const beamInputCost = beamInput.value;
-            const beamActionSale = bestAvailableSaleValue(
-                beamRecord,
-                carpentry
-            );
-            const beamOutputValue = beamActionSale.value;
+            const plankInput =
+                plankShared?.ingredients?.[0]?.costResult || {
+                    value: NaN,
+                    source: 'Unavailable'
+                };
+            const plankInputCost =
+                Number(plankShared?.inputCost);
+            const plankActionSale =
+                plankShared?.outputSale;
+            const plankOutputValue =
+                Number(plankShared?.outputValue);
+            const plankActionProfit =
+                Number(plankShared?.profitPerAction);
+            const plankActionProfitHour =
+                Number(plankShared?.profitPerHour);
+
+            const beamInput =
+                beamShared?.ingredients?.[0]?.costResult || {
+                    value: NaN,
+                    source: 'Unavailable'
+                };
+            const beamInputCost =
+                Number(beamShared?.inputCost);
+            const beamActionSale =
+                beamShared?.outputSale;
+            const beamOutputValue =
+                Number(beamShared?.outputValue);
             const beamActionProfit =
-                Number.isFinite(beamInputCost) &&
-                Number.isFinite(beamOutputValue)
-                    ? beamOutputValue - beamInputCost
-                    : NaN;
-            const beamActionProfitHour = goldPerHour(
-                beamActionProfit,
-                beamCycle
-            );
+                Number(beamShared?.profitPerAction);
+            const beamActionProfitHour =
+                Number(beamShared?.profitPerHour);
 
             const plankProfitHour = goldPerHour(
                 plankProfitPerLog,
@@ -4432,8 +4853,11 @@
                 };
             });
 
-            const requiredLevel = WOOD_REQUIRED_LEVELS[wood] || 1;
             const canCraft = hasRequiredLevel('carpentry', requiredLevel);
+            const locked = economySkillLockState(
+                'carpentry',
+                requiredLevel
+            ).locked;
 
             const options = [
                 {
@@ -4533,6 +4957,12 @@
                 beamBestPort,
                 requiredLevel,
                 canCraft,
+                locked,
+                logRecord,
+                plankRecord,
+                beamRecord,
+                plankShared,
+                beamShared,
                 bestPerLog,
                 bestPerHour,
                 volume:
@@ -4619,49 +5049,76 @@
              * - Smelting action consumes two ore.
              * - Nail action consumes one bar.
              */
-            const barActionInput = resolveCraftInputCost(
-                oreRecord,
-                2
+            const barShared = calculateSharedCraftProfit(
+                {
+                    name: `${metal} Bar`,
+                    skill: 'smelting',
+                    requiredLevel:
+                        BAR_REQUIRED_LEVELS[metal] || 1,
+                    ingredients: [
+                        {
+                            name: `${metal} Ore`,
+                            quantity: 2
+                        }
+                    ],
+                    outputPerBatch: smelting,
+                    baseCycle:
+                        METAL_CRAFT_TIMES[metal]?.bar || 0,
+                    fee: Number(feeInfo.fee || 0),
+                    inputMode: 'purchase'
+                }
             );
-            const barActionInputCost = barActionInput.value;
-            const barActionSale = bestAvailableSaleValue(
-                barRecord,
-                smelting
-            );
-            const barActionOutputValue = barActionSale.value;
+            const barActionInput =
+                barShared?.ingredients?.[0]?.costResult || {
+                    value: NaN,
+                    source: 'Unavailable'
+                };
+            const barActionInputCost =
+                Number(barShared?.inputCost);
+            const barActionSale =
+                barShared?.outputSale;
+            const barActionOutputValue =
+                Number(barShared?.outputValue);
             const barActionProfit =
-                Number.isFinite(barActionInputCost) &&
-                Number.isFinite(barActionOutputValue)
-                    ? barActionOutputValue -
-                        barActionInputCost -
-                        Number(feeInfo.fee || 0)
-                    : NaN;
-            const barActionProfitHour = goldPerHour(
-                barActionProfit,
-                barCycle
-            );
+                Number(barShared?.profitPerAction);
+            const barActionProfitHour =
+                Number(barShared?.profitPerHour);
 
-            const nailActionInput = resolveCraftInputCost(
-                barRecord,
-                1
-            );
-            const nailActionInputCost = nailActionInput.value;
             const nailsPerAction = 4 * crafting;
-            const nailActionSale = bestAvailableSaleValue(
-                nailRecord,
-                nailsPerAction
+            const nailShared = calculateSharedCraftProfit(
+                {
+                    name: `${metal} Nails`,
+                    skill: 'crafting',
+                    requiredLevel:
+                        NAIL_REQUIRED_LEVELS[metal] || 1,
+                    ingredients: [
+                        {
+                            name: `${metal} Bar`,
+                            quantity: 1
+                        }
+                    ],
+                    outputPerBatch: nailsPerAction,
+                    baseCycle:
+                        METAL_CRAFT_TIMES[metal]?.nail || 0,
+                    fee: 0,
+                    inputMode: 'purchase'
+                }
             );
-            const nailActionOutputValue = nailActionSale.value;
+            const nailActionInput =
+                nailShared?.ingredients?.[0]?.costResult || {
+                    value: NaN,
+                    source: 'Unavailable'
+                };
+            const nailActionInputCost =
+                Number(nailShared?.inputCost);
+            const nailActionSale =
+                nailShared?.outputSale;
+            const nailActionOutputValue =
+                Number(nailShared?.outputValue);
             const nailActionProfit =
-                Number.isFinite(nailActionInputCost) &&
-                Number.isFinite(nailActionOutputValue)
-                    ? nailActionOutputValue -
-                        nailActionInputCost
-                    : NaN;
-            const nailActionProfitHour = goldPerHour(
-                nailActionProfit,
-                nailCycle
-            );
+                Number(nailShared?.profitPerAction);
+            const nailActionProfitHour =
+                Number(nailShared?.profitPerHour);
 
             const barProfitHour = goldPerHour(
                 barProfitPerOre,
@@ -4761,6 +5218,14 @@
             const canCraftNails =
                 canSmelt &&
                 hasRequiredLevel('crafting', nailRequiredLevel);
+            const barLocked = economySkillLockState(
+                'smelting',
+                barRequiredLevel
+            ).locked;
+            const nailLocked = economySkillLockState(
+                'crafting',
+                nailRequiredLevel
+            ).locked;
 
             const options = [
                 {
@@ -4866,6 +5331,13 @@
                 canMine,
                 canSmelt,
                 canCraftNails,
+                barLocked,
+                nailLocked,
+                oreRecord,
+                barRecord,
+                nailRecord,
+                barShared,
+                nailShared,
                 bestPerOre,
                 bestPerHour,
                 volume:
@@ -4899,43 +5371,40 @@
 
             const ingredientPrice = chosenMarketPrice(ingredientRecord);
             const cookedPrice = chosenMarketPrice(cookedRecord);
-            const outputPerBatch = outputMultiplier;
+            const shared = calculateSharedCraftProfit(
+                {
+                    name: recipe.item,
+                    skill: 'cooking',
+                    requiredLevel: recipe.level,
+                    ingredients: [
+                        {
+                            name: recipe.ingredient,
+                            quantity: 1
+                        }
+                    ],
+                    outputPerBatch: outputMultiplier,
+                    baseCycle: recipe.cycle,
+                    fee: Number(recipe.fee || 0),
+                    inputMode: 'purchase'
+                }
+            );
+            const outputPerBatch = shared.outputPerBatch;
             const canCraft = hasRequiredLevel('cooking', recipe.level);
-
-            const ingredientSale = resolveCraftInputCost(
-                ingredientRecord,
-                1
-            );
-            const cookedSale = bestAvailableSaleValue(
-                cookedRecord,
-                outputPerBatch
-            );
+            const locked = shared.locked;
+            const ingredientSale =
+                shared.ingredients?.[0]?.costResult || {
+                    value: NaN,
+                    source: 'Unavailable'
+                };
+            const cookedSale = shared.outputSale;
             const hasPrices =
-                ingredientSale.value > 0 &&
-                cookedSale.value > 0;
-
-            const grossAfterTax = hasPrices
-                ? cookedSale.value
-                : NaN;
-
-            const ingredientOpportunityCost = hasPrices
-                ? ingredientSale.value
-                : NaN;
-
-            const profitPerBatch = hasPrices
-                ? grossAfterTax -
-                    ingredientOpportunityCost -
-                    Number(recipe.fee || 0)
-                : NaN;
-
-            const currentCycle = adjustedCraftTime(
-                recipe.cycle,
-                'cooking'
-            );
-
-            const currentProfitHour = Number.isFinite(profitPerBatch)
-                ? goldPerHour(profitPerBatch, currentCycle)
-                : NaN;
+                Number.isFinite(shared.inputCost) &&
+                Number.isFinite(shared.outputValue);
+            const grossAfterTax = shared.outputValue;
+            const ingredientOpportunityCost = shared.inputCost;
+            const profitPerBatch = shared.profitPerAction;
+            const currentCycle = shared.cycle;
+            const currentProfitHour = shared.profitPerHour;
 
             /*
              * Separate from-scratch recommendation:
@@ -5053,6 +5522,10 @@
                 profitPerBatch,
                 currentCycle,
                 currentProfitHour,
+                locked,
+                shared,
+                ingredientRecord,
+                cookedRecord,
                 fishingRecipe,
                 fishPerFishingAction,
                 cookedPerFishingAction,
@@ -5098,7 +5571,7 @@
                         </thead>
                         <tbody>
                             ${rows.map(row => `
-                                <tr>
+                                <tr class="${row.locked ? 'tqm-row-locked' : ''}">
                                     <td>
                                         <strong>
                                             ${escapeHtml(row.ingredient)}
@@ -5106,7 +5579,7 @@
                                             ${escapeHtml(row.item)}
                                         </strong>
                                         <small class="tqm-level-note">
-                                            Lv. ${row.level}
+                                            Lv. ${row.level}${row.locked ? ' · Locked' : ''}
                                         </small>
                                     </td>
                                     <td title="${escapeHtml(craftProfitTooltip({
@@ -5158,8 +5631,16 @@
                                         }
                                     </td>
                                     <td class="tqm-best">
-                                        ${escapeHtml(
-                                            row.cookedSale?.source || 'N/A'
+                                        ${renderPriceSource(
+                                            row.cookedSale?.source || 'N/A',
+                                            [
+                                                row.cookedRecord,
+                                                row.ingredientRecord
+                                            ],
+                                            {
+                                                skill: 'cooking',
+                                                includeInventory: true
+                                            }
                                         )}
                                     </td>
                                 </tr>
@@ -5194,7 +5675,7 @@
                         </thead>
                         <tbody>
                             ${rows.map(row => `
-                                <tr>
+                                <tr class="${row.locked ? 'tqm-row-locked' : ''}">
                                     <td>
                                         <strong>
                                             ${escapeHtml(row.item)}
@@ -5235,34 +5716,47 @@
                 const itemRecord = findItemPrice([itemName]);
                 const itemPrice = chosenMarketPrice(itemRecord);
 
+                const shared = calculateSharedCraftProfit(
+                    {
+                        name: itemName,
+                        skill: 'smithing',
+                        requiredLevel,
+                        ingredients: [
+                            {
+                                name: `${metal} Bar`,
+                                quantity: 1
+                            }
+                        ],
+                        outputPerBatch:
+                            SHOT_OUTPUT_PER_BATCH *
+                            smithingMastery,
+                        baseCycle:
+                            SHOT_CRAFT_TIMES[metal] || 0,
+                        fee: Number(feeInfo.fee || 0),
+                        inputMode: 'purchase'
+                    }
+                );
                 const outputPerBatch =
-                    SHOT_OUTPUT_PER_BATCH * smithingMastery;
-
-                const itemSale = bestAvailableSaleValue(
-                    itemRecord,
-                    outputPerBatch
-                );
-                const grossSaleValue = itemSale.value;
-                const barOpportunityCost = barSale.value;
-                const hasPrices =
-                    Number.isFinite(grossSaleValue) &&
-                    Number.isFinite(barOpportunityCost);
-
-                const profitPerBatch = hasPrices
-                    ? grossSaleValue -
-                        barOpportunityCost -
-                        Number(feeInfo.fee || 0)
-                    : NaN;
-
-                const currentCycle = adjustedCraftTime(
-                    SHOT_CRAFT_TIMES[metal],
-                    'smithing'
-                );
-
-                const currentProfitHour = goldPerHour(
-                    profitPerBatch,
-                    currentCycle
-                );
+                    shared.outputPerBatch;
+                const itemSale =
+                    shared.outputSale;
+                const actionBarSale =
+                    shared.ingredients?.[0]?.costResult || {
+                        value: NaN,
+                        source: 'Unavailable'
+                    };
+                const grossSaleValue =
+                    shared.outputValue;
+                const barOpportunityCost =
+                    shared.inputCost;
+                const profitPerBatch =
+                    shared.profitPerAction;
+                const currentCycle =
+                    shared.cycle;
+                const currentProfitHour =
+                    shared.profitPerHour;
+                const locked =
+                    shared.locked;
 
                 const bestPort = bestCityResult(city => {
                     const seconds = adjustedCraftTimeForCity(
@@ -5293,7 +5787,11 @@
                     barPrice,
                     itemPrice,
                     itemSale,
-                    barSale,
+                    barSale: actionBarSale,
+                    itemRecord,
+                    barRecord,
+                    shared,
+                    locked,
                     grossSaleValue,
                     barOpportunityCost,
                     profitPerBatch,
@@ -5334,13 +5832,13 @@
                         </thead>
                         <tbody>
                             ${rows.map(row => `
-                                <tr>
+                                <tr class="${row.locked ? 'tqm-row-locked' : ''}">
                                     <td>
                                         <strong>
                                             ${escapeHtml(row.itemName)}
                                         </strong>
                                         <small class="tqm-level-note">
-                                            Lv. ${row.requiredLevel}
+                                            Lv. ${row.requiredLevel}${row.locked ? ' · Locked' : ''}
                                         </small>
                                     </td>
                                     <td>
@@ -5395,8 +5893,16 @@
                                         }
                                     </td>
                                     <td class="tqm-best">
-                                        ${escapeHtml(
-                                            row.itemSale?.source || 'N/A'
+                                        ${renderPriceSource(
+                                            row.itemSale?.source || 'N/A',
+                                            [
+                                                row.itemRecord,
+                                                row.barRecord
+                                            ],
+                                            {
+                                                skill: 'smithing',
+                                                includeInventory: true
+                                            }
                                         )}
                                     </td>
                                 </tr>
@@ -5433,7 +5939,7 @@
                         </thead>
                         <tbody>
                             ${rows.map(row => `
-                                <tr>
+                                <tr class="${row.locked ? 'tqm-row-locked' : ''}">
                                     <td>
                                         <strong>
                                             ${escapeHtml(row.itemName)}
@@ -7352,7 +7858,9 @@
         const gatheringSkills = ['logging', 'mining', 'fishing'];
 
         return gatheringSkills.flatMap(skill => {
-            return supportedXpRowsForSkill(skill).map(recipe => {
+            return BUILT_IN_XP_RECIPES
+                .filter(recipe => recipe.skill === skill)
+                .map(recipe => {
                 const cycle = adjustedCraftTime(
                     recipe.cycle,
                     skill
@@ -7435,7 +7943,8 @@
                     vendorPerHour,
                     bestPerHour: best?.value ?? NaN,
                     bestMethod: best?.method || 'N/A',
-                    inputCost
+                    inputCost,
+                    record
                 };
             });
         });
@@ -8380,13 +8889,13 @@
                         <tbody>
                             ${rows.flatMap(row => [
                                 `
-                                    <tr>
+                                    <tr class="${row.locked ? 'tqm-row-locked' : ''}">
                                         <td>
                                             <strong>
                                                 ${escapeHtml(`${row.material} Planks`)}
                                             </strong>
                                             <small class="tqm-level-note">
-                                                Lv. ${row.requiredLevel}
+                                                Lv. ${row.requiredLevel}${row.locked ? ' · Locked' : ''}
                                             </small>
                                         </td>
                                         <td>Log → Planks</td>
@@ -8438,19 +8947,30 @@
                                             }
                                         </td>
                                         <td class="tqm-best">
-                                            ${escapeHtml(
+                                            ${renderPriceSource(
                                                 row.plankActionSale?.source ||
-                                                'N/A'
+                                                'N/A',
+                                                [
+                                                    row.plankRecord,
+                                                    row.logRecord
+                                                ],
+                                                {
+                                                    skill: 'carpentry',
+                                                    includeInventory: true
+                                                }
                                             )}
                                         </td>
                                     </tr>
                                 `,
                                 `
-                                    <tr>
+                                    <tr class="${row.locked ? 'tqm-row-locked' : ''}">
                                         <td>
                                             <strong>
                                                 ${escapeHtml(`${row.material} Beams`)}
                                             </strong>
+                                            <small class="tqm-level-note">
+                                                Lv. ${row.requiredLevel}${row.locked ? ' · Locked' : ''}
+                                            </small>
                                         </td>
                                         <td>2 Planks → Beams</td>
                                         <td title="${escapeHtml(craftProfitTooltip({
@@ -8501,9 +9021,17 @@
                                             }
                                         </td>
                                         <td class="tqm-best">
-                                            ${escapeHtml(
+                                            ${renderPriceSource(
                                                 row.beamActionSale?.source ||
-                                                'N/A'
+                                                'N/A',
+                                                [
+                                                    row.beamRecord,
+                                                    row.plankRecord
+                                                ],
+                                                {
+                                                    skill: 'carpentry',
+                                                    includeInventory: true
+                                                }
                                             )}
                                         </td>
                                     </tr>
@@ -8542,7 +9070,7 @@
                         </thead>
                         <tbody>
                             ${rows.map(row => `
-                                <tr>
+                                <tr class="${row.locked ? 'tqm-row-locked' : ''}">
                                     <td>
                                         <strong>
                                             ${escapeHtml(row.material)}
@@ -8839,6 +9367,518 @@
                 </div>
             </section>
             </div>
+        `;
+    }
+
+    // =========================================================
+    // SKILL-BASED ECONOMY TABS
+    // =========================================================
+
+    function renderGatheringSubset(skills, title, note) {
+        preloadKnownVendorPrices();
+
+        const allowed = new Set(skills);
+        const rows = calculateGatheringRows();
+        const labels = {
+            logging: 'Logging',
+            mining: 'Mining',
+            fishing: 'Fishing'
+        };
+
+        const groups = skills.map(skill => [skill, labels[skill] || skill]);
+
+        return `
+            <section class="tqm-card">
+                <div class="tqm-section-heading-row">
+                    <div>
+                        <h2>${escapeHtml(title)}</h2>
+                        <p class="tqm-note">${escapeHtml(note)}</p>
+                    </div>
+                </div>
+
+                <div class="tqm-gathering-card-grid tqm-gathering-${skills.length}">
+                    ${groups.map(([skill, label]) => {
+                        const currentLevel = Number(state.skillLevels[skill] || 0);
+                        const levelKnown = Number.isFinite(currentLevel) && currentLevel > 0;
+                        const skillRows = rows
+                            .filter(row => allowed.has(row.skill) && row.skill === skill)
+                            .sort((a, b) =>
+                                Number(a.level || 0) - Number(b.level || 0) ||
+                                String(a.item || '').localeCompare(String(b.item || ''))
+                            );
+
+                        return `
+                            <section class="tqm-gathering-group">
+                                <h3>${escapeHtml(label)}</h3>
+
+                                <div class="tqm-table-wrap">
+                                    <table class="tqm-table tqm-table-compact">
+                                        <thead>
+                                            <tr>
+                                                <th>Resource</th>
+                                                <th>Yield</th>
+                                                <th>Time</th>
+                                                <th>Profit/hr</th>
+                                                <th>Sell</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            ${skillRows.map(row => {
+                                                const locked =
+                                                    levelKnown &&
+                                                    Number(row.level || 1) > currentLevel;
+
+                                                return `
+                                                <tr class="${locked ? 'tqm-row-locked' : ''}">
+                                                    <td>
+                                                        <strong>${escapeHtml(row.item)}</strong>
+                                                        <small class="tqm-level-note">
+                                                            Lv. ${row.level}${locked ? ' · Locked' : ''}
+                                                        </small>
+                                                    </td>
+                                                    <td>
+                                                        ${Number(row.yieldPerAction).toLocaleString(undefined, {
+                                                            maximumFractionDigits: 2
+                                                        })}
+                                                    </td>
+                                                    <td>${formatSeconds(row.cycle)}</td>
+                                                    <td class="${
+                                                        Number.isFinite(row.bestPerHour)
+                                                            ? row.bestPerHour >= 0
+                                                                ? 'tqm-profit-positive'
+                                                                : 'tqm-profit-negative'
+                                                            : ''
+                                                    }">
+                                                        ${Number.isFinite(row.bestPerHour)
+                                                            ? moneyPerHour(row.bestPerHour)
+                                                            : 'N/A'}
+                                                    </td>
+                                                    <td class="tqm-best">
+                                                        ${renderPriceSource(
+                                                            row.bestMethod,
+                                                            row.record,
+                                                            {
+                                                                skill: row.skill,
+                                                                includeInventory: false
+                                                            }
+                                                        )}
+                                                    </td>
+                                                </tr>
+                                            `;
+                                            }).join('')}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </section>
+                        `;
+                    }).join('')}
+                </div>
+            </section>
+        `;
+    }
+
+    function renderLoggingMining() {
+        return renderGatheringSubset(
+            ['logging', 'mining'],
+            'Logging / Mining Profit',
+            'Direct gathering income. Yield mastery, current-city action speed, Exchange tax, and vendor values are included.'
+        );
+    }
+
+    function renderFishingSkill() {
+        return renderGatheringSubset(
+            ['fishing'],
+            'Fishing Profit',
+            'Direct fishing income. Yield mastery, action speed, bait cost, Exchange tax, and vendor values are included.'
+        );
+    }
+
+    function renderCarpentrySkill() {
+        return renderWood()
+            .replace('Wood Crafting Profit', 'Carpentry Profit')
+            .replace('Wood Crafting Times', 'Carpentry Times');
+    }
+
+    function renderSmeltingSkill() {
+        const rows = calculateMetalRows();
+        const smeltingYield = yieldMultiplier('smelting');
+
+        return `
+            <div class="tqm-processing-layout">
+                <section class="tqm-card">
+                    <div class="tqm-section-heading-row">
+                        <div>
+                            <h2>Smelting Profit</h2>
+                            <p class="tqm-note">
+                                Ore → Bars only. Profit uses the same Smelting calculation that was previously shown in the Metal tab.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="tqm-table-wrap">
+                        <table class="tqm-table tqm-table-compact">
+                            <thead>
+                                <tr>
+                                    <th>Product</th>
+                                    <th>Action</th>
+                                    <th>Profit</th>
+                                    <th>Profit/hr</th>
+                                    <th>Sell</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${rows.map(row => `
+                                    <tr class="${row.barLocked ? 'tqm-row-locked' : ''}">
+                                        <td>
+                                            <strong>${escapeHtml(`${row.material} Bars`)}</strong>
+                                            <small class="tqm-level-note">Lv. ${row.barRequiredLevel}${row.barLocked ? ' · Locked' : ''}</small>
+                                        </td>
+                                        <td>
+                                            2 Ore → ${Number(smeltingYield).toLocaleString(undefined, {
+                                                maximumFractionDigits: 2
+                                            })} ${smeltingYield === 1 ? 'Bar' : 'Bars'}
+                                        </td>
+                                        <td title="${escapeHtml(craftProfitTooltip({
+                                            inputLabel: `2 ${row.material} Ore`,
+                                            inputCost: row.barActionInputCost,
+                                            inputSource: row.barActionInput?.source,
+                                            outputLabel: smeltingYield === 1
+                                                ? `${row.material} Bar`
+                                                : `${row.material} Bars`,
+                                            outputQuantity: smeltingYield,
+                                            outputValue: row.barActionOutputValue,
+                                            saleSource: row.barActionSale?.source,
+                                            fee: row.fee,
+                                            feeLabel: 'Smelting supply fee',
+                                            profit: row.barActionProfit,
+                                            cycle: row.barCycle
+                                        }))}" class="${
+                                            Number.isFinite(row.barActionProfit)
+                                                ? row.barActionProfit >= 0
+                                                    ? 'tqm-profit-positive'
+                                                    : 'tqm-profit-negative'
+                                                : ''
+                                        }">
+                                            ${Number.isFinite(row.barActionProfit)
+                                                ? signedMoney(row.barActionProfit)
+                                                : 'N/A'}
+                                        </td>
+                                        <td class="${
+                                            Number.isFinite(row.barActionProfitHour)
+                                                ? row.barActionProfitHour >= 0
+                                                    ? 'tqm-profit-positive'
+                                                    : 'tqm-profit-negative'
+                                                : ''
+                                        }">
+                                            ${Number.isFinite(row.barActionProfitHour)
+                                                ? signedMoneyPerHour(row.barActionProfitHour)
+                                                : 'N/A'}
+                                        </td>
+                                        <td class="tqm-best">
+                                            ${renderPriceSource(
+                                                row.barActionSale?.source || 'N/A',
+                                                [
+                                                    row.barRecord,
+                                                    row.oreRecord
+                                                ],
+                                                {
+                                                    skill: 'smelting',
+                                                    includeInventory: true
+                                                }
+                                            )}
+                                        </td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <section class="tqm-card">
+                    <div class="tqm-section-heading-row">
+                        <div>
+                            <h2>Smelting Times</h2>
+                            <p class="tqm-note">Current-city Smelting speed bonuses are included.</p>
+                        </div>
+                        <div class="tqm-best-port-badge">
+                            <span>Best Smelting Port</span>
+                            <strong>${escapeHtml(bestCityForSkill('smelting'))}</strong>
+                        </div>
+                    </div>
+
+                    <div class="tqm-table-wrap">
+                        <table class="tqm-table tqm-table-compact">
+                            <thead>
+                                <tr><th>Resource</th><th>Time</th></tr>
+                            </thead>
+                            <tbody>
+                                ${rows.map(row => `
+                                    <tr class="${row.barLocked ? 'tqm-row-locked' : ''}">
+                                        <td><strong>${escapeHtml(`${row.material} Bars`)}</strong></td>
+                                        <td>${formatCycleSeconds(row.barCycle)}</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+            </div>
+        `;
+    }
+    function calculateGenericRecipeProfitRows(recipes) {
+        return recipes.map(recipe => {
+            const shared = calculateSharedCraftProfit(
+                recipe,
+                {
+                    inputMode:
+                        recipe.inputMode ||
+                        (recipe.skill === 'carpentry'
+                            ? 'opportunity'
+                            : 'purchase')
+                }
+            );
+
+            return {
+                ...recipe,
+                ingredientDetails: shared.ingredients,
+                inputCost: shared.inputCost,
+                outputQuantity: shared.outputPerBatch,
+                outputRecord: shared.outputRecord,
+                outputSale: shared.outputSale,
+                outputValue: shared.outputValue,
+                fee: shared.fee,
+                cycle: shared.cycle,
+                profit: shared.profitPerAction,
+                profitHour: shared.profitPerHour,
+                canCraft: hasRequiredLevel(
+                    recipe.skill,
+                    recipe.requiredLevel
+                ),
+                locked: shared.locked,
+                shared
+            };
+        });
+    }
+
+    function recipeActionLabel(row) {
+        const input = (row.ingredients || [])
+            .map(ingredient => `${Number(ingredient.quantity || 0).toLocaleString()} ${ingredient.name}`)
+            .join(' + ');
+        const output = `${Number(row.outputQuantity || 1).toLocaleString(undefined, {
+            maximumFractionDigits: 2
+        })} ${row.name}`;
+
+        return `${input || 'Materials'} → ${output}`;
+    }
+
+    function genericProfitTable(rows, { emptyLabel = 'No recipes available.' } = {}) {
+        return `
+            <div class="tqm-table-wrap">
+                <table class="tqm-table tqm-table-compact">
+                    <thead>
+                        <tr>
+                            <th>Product</th>
+                            <th>Action</th>
+                            <th>Profit</th>
+                            <th>Profit/hr</th>
+                            <th>Sell</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${rows.length
+                            ? rows.map(row => `
+                                <tr class="${row.locked ? 'tqm-row-locked' : ''}">
+                                    <td>
+                                        <strong>${escapeHtml(row.name)}</strong>
+                                        <small class="tqm-level-note">Lv. ${row.requiredLevel}${row.locked ? ' · Locked' : ''}</small>
+                                    </td>
+                                    <td>${escapeHtml(recipeActionLabel(row))}</td>
+                                    <td class="${
+                                        Number.isFinite(row.profit)
+                                            ? row.profit >= 0
+                                                ? 'tqm-profit-positive'
+                                                : 'tqm-profit-negative'
+                                            : ''
+                                    }">
+                                        ${Number.isFinite(row.profit)
+                                            ? signedMoney(row.profit)
+                                            : 'N/A'}
+                                    </td>
+                                    <td class="${
+                                        Number.isFinite(row.profitHour)
+                                            ? row.profitHour >= 0
+                                                ? 'tqm-profit-positive'
+                                                : 'tqm-profit-negative'
+                                            : ''
+                                    }">
+                                        ${Number.isFinite(row.profitHour)
+                                            ? signedMoneyPerHour(row.profitHour)
+                                            : 'N/A'}
+                                    </td>
+                                    <td class="tqm-best">
+                                        ${renderPriceSource(
+                                            row.outputSale?.source || 'N/A',
+                                            row.shared?.freshness ||
+                                            row.outputRecord,
+                                            {
+                                                skill: row.skill || '',
+                                                includeInventory: true
+                                            }
+                                        )}
+                                    </td>
+                                </tr>
+                            `).join('')
+                            : `<tr><td colspan="5" class="tqm-empty">${escapeHtml(emptyLabel)}</td></tr>`}
+                    </tbody>
+                </table>
+            </div>
+        `;
+    }
+
+    function renderCraftingSkill() {
+        const metalRows = calculateMetalRows();
+        const nailRows = metalRows.map(row => ({
+            name: `${row.material} Nails`,
+            material: row.material,
+            requiredLevel: row.nailRequiredLevel,
+            canCraft: row.canCraftNails,
+            locked: row.nailLocked,
+            outputQuantity: row.nailsPerAction,
+            profit: row.nailActionProfit,
+            profitHour: row.nailActionProfitHour,
+            inputRecord: row.barRecord,
+            outputRecord: row.nailRecord,
+            outputSale: row.nailActionSale,
+            cycle: row.nailCycle
+        }));
+
+        const repairRecipes = plannerRecipeCatalog().filter(recipe =>
+            recipe.skill === 'crafting' &&
+            String(recipe.id || '').startsWith('crafting:repair:')
+        );
+        const repairRows = calculateGenericRecipeProfitRows(repairRecipes);
+
+        return `
+            <div class="tqm-processing-layout">
+                <section class="tqm-card">
+                    <div class="tqm-section-heading-row">
+                        <div>
+                            <h2>Crafting — Nails</h2>
+                            <p class="tqm-note">
+                                Nails have moved out of the old Metal tab because they use the Crafting skill.
+                            </p>
+                        </div>
+                    </div>
+
+                    <div class="tqm-table-wrap">
+                        <table class="tqm-table tqm-table-compact">
+                            <thead>
+                                <tr>
+                                    <th>Product</th>
+                                    <th>Action</th>
+                                    <th>Profit</th>
+                                    <th>Profit/hr</th>
+                                    <th>Sell</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${nailRows.map(row => `
+                                    <tr class="${row.locked ? 'tqm-row-locked' : ''}">
+                                        <td>
+                                            <strong>${escapeHtml(row.name)}</strong>
+                                            <small class="tqm-level-note">Lv. ${row.requiredLevel}${row.locked ? ' · Locked' : ''}</small>
+                                        </td>
+                                        <td>
+                                            1 ${escapeHtml(row.material)} Bar → ${Number(row.outputQuantity).toLocaleString(undefined, {
+                                                maximumFractionDigits: 2
+                                            })} Nails
+                                        </td>
+                                        <td class="${
+                                            Number.isFinite(row.profit)
+                                                ? row.profit >= 0
+                                                    ? 'tqm-profit-positive'
+                                                    : 'tqm-profit-negative'
+                                                : ''
+                                        }">
+                                            ${Number.isFinite(row.profit)
+                                                ? signedMoney(row.profit)
+                                                : 'N/A'}
+                                        </td>
+                                        <td class="${
+                                            Number.isFinite(row.profitHour)
+                                                ? row.profitHour >= 0
+                                                    ? 'tqm-profit-positive'
+                                                    : 'tqm-profit-negative'
+                                                : ''
+                                        }">
+                                            ${Number.isFinite(row.profitHour)
+                                                ? signedMoneyPerHour(row.profitHour)
+                                                : 'N/A'}
+                                        </td>
+                                        <td class="tqm-best">
+                                            ${renderPriceSource(
+                                                row.outputSale?.source || 'N/A',
+                                                [
+                                                    row.outputRecord,
+                                                    row.inputRecord
+                                                ],
+                                                {
+                                                    skill: 'crafting',
+                                                    includeInventory: true
+                                                }
+                                            )}
+                                        </td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    </div>
+                </section>
+
+                <section class="tqm-card">
+                    <div class="tqm-section-heading-row">
+                        <div>
+                            <h2>Crafting — Repair Kits &amp; Crates</h2>
+                            <p class="tqm-note">
+                                Repair kits, restoration kits, and refit crates now have their own Crafting profit table.
+                            </p>
+                        </div>
+                        <div class="tqm-best-port-badge">
+                            <span>Best Crafting Port</span>
+                            <strong>${escapeHtml(bestCityForSkill('crafting'))}</strong>
+                        </div>
+                    </div>
+                    ${genericProfitTable(repairRows)}
+                </section>
+            </div>
+        `;
+    }
+
+    function calculateCannonProfitRows() {
+        const recipes = plannerRecipeCatalog().filter(recipe =>
+            recipe.skill === 'smithing' &&
+            String(recipe.id || '').startsWith('smithing:cannon:')
+        );
+
+        return calculateGenericRecipeProfitRows(recipes);
+    }
+
+    function renderSmithingSkill() {
+        const cannonRows = calculateCannonProfitRows();
+
+        return `
+            ${renderAmmunition()}
+            <section class="tqm-card">
+                <div class="tqm-section-heading-row">
+                    <div>
+                        <h2>Cannon Smithing Profit</h2>
+                        <p class="tqm-note">
+                            Cannons are shown here with ammunition because both use the Smithing skill.
+                        </p>
+                    </div>
+                </div>
+                ${genericProfitTable(cannonRows)}
+            </section>
         `;
     }
 
@@ -10020,6 +11060,10 @@
             'tqm-theme-classic',
             preferences.theme === 'classic'
         );
+        overlay.classList.toggle(
+            'tqm-hide-locked-skill-rows',
+            !preferences.showLockedSkillRows
+        );
         overlay.dataset.tqmFontSize =
             ['small', 'normal', 'large'].includes(preferences.fontSize)
                 ? preferences.fontSize
@@ -10221,6 +11265,59 @@
                 </section>
 
                 <section class="tqm-card">
+                    <h2>Feature Controls</h2>
+                    <p class="tqm-note tqm-compact-note">
+                        Turn Quartermaster's newer economy helpers on or off
+                        without disabling the main script.
+                    </p>
+
+                    ${[
+                        [
+                            'tqm-pref-item-inspector',
+                            'itemInspectorEnabled',
+                            'Ctrl Item Inspector',
+                            'Hold Ctrl over supported items to open the economy inspector.'
+                        ],
+                        [
+                            'tqm-pref-price-freshness',
+                            'showPriceFreshness',
+                            'Price freshness',
+                            'Show how old Exchange data is in skill tables and the Ctrl inspector.'
+                        ],
+                        [
+                            'tqm-pref-pinned-comparison',
+                            'pinnedComparisonEnabled',
+                            'Pinned comparison mode',
+                            'Pin one inspector and Ctrl-hover another item to compare them.'
+                        ],
+                        [
+                            'tqm-pref-craft-capacity',
+                            'showInspectorCraftCapacity',
+                            'Max craftable + missing materials',
+                            'Show inventory capacity and missing ingredients in the Ctrl inspector.'
+                        ],
+                        [
+                            'tqm-pref-locked-rows',
+                            'showLockedSkillRows',
+                            'Show locked future tiers',
+                            'Keep recipes above your detected skill level visible and dimmed.'
+                        ]
+                    ].map(([id, key, title, description]) => `
+                        <label class="tqm-feature-toggle-row">
+                            <input
+                                id="${id}"
+                                type="checkbox"
+                                ${preferences[key] ? 'checked' : ''}
+                            >
+                            <span>
+                                <strong>${title}</strong>
+                                <small>${description}</small>
+                            </span>
+                        </label>
+                    `).join('')}
+                </section>
+
+                <section class="tqm-card">
                     <h2>Inventory</h2>
                     <p class="tqm-note tqm-compact-note">
                         Reads the current city warehouse and current ship cargo
@@ -10353,6 +11450,29 @@
                                     ${state.developerMode ? 'checked' : ''}>
                                 <span>Developer Mode</span>
                             </label>
+
+                            ${state.developerMode ? `
+                                <label class="tqm-feature-toggle-row tqm-dev-feature-toggle">
+                                    <input
+                                        id="tqm-pref-source-indicators"
+                                        type="checkbox"
+                                        ${preferences.showCalculationSourceIndicators ? 'checked' : ''}
+                                    >
+                                    <span>
+                                        <strong>Calculation data-source indicators</strong>
+                                        <small>
+                                            Show small source badges beside calculated results,
+                                            such as Live Market, Vendor, Inventory, Mastery,
+                                            city bonus, and Recipe DB.
+                                        </small>
+                                    </span>
+                                </label>
+                            ` : `
+                                <p class="tqm-note tqm-compact-note">
+                                    Enable Developer Mode to show calculation
+                                    data-source indicators.
+                                </p>
+                            `}
                         </div>
                     </details>
                 </section>
@@ -10537,15 +11657,17 @@
 
         try {
             body.innerHTML =
-                tab === 'gathering' ? renderGathering() :
-                tab === 'wood' ? renderWood() :
-                tab === 'metal' ? renderMetal() :
-                tab === 'ammo' ? renderAmmunition() :
+                tab === 'gathering' ? renderLoggingMining() :
+                tab === 'fishing' ? renderFishingSkill() :
+                tab === 'carpentry' ? renderCarpentrySkill() :
+                tab === 'smelting' ? renderSmeltingSkill() :
+                tab === 'smithing' ? renderSmithingSkill() :
                 tab === 'cooking' ? renderCooking() :
+                tab === 'crafting' ? renderCraftingSkill() :
                 tab === 'xp' ? renderXpPlanner() :
                 tab === 'planner' ? renderCraftingPlanner() :
-                tab === 'ship' ? renderShipBuilder() :
                 tab === 'simulator' ? renderMasterySimulator() :
+                tab === 'ship' ? renderShipBuilder() :
                 tab === 'mastery' ? renderMastery() :
                 tab === 'captured' && state.developerMode
                     ? renderCaptured()
@@ -11352,12 +12474,28 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
             ['#tqm-pref-intermediate-materials', 'showIntermediateMaterials'],
             ['#tqm-pref-ship-progress', 'showShipProgress'],
             ['#tqm-pref-buy-craft', 'showBuyCraftRecommendations'],
-            ['#tqm-pref-compact', 'compactMode']
+            ['#tqm-pref-compact', 'compactMode'],
+            ['#tqm-pref-item-inspector', 'itemInspectorEnabled'],
+            ['#tqm-pref-price-freshness', 'showPriceFreshness'],
+            ['#tqm-pref-pinned-comparison', 'pinnedComparisonEnabled'],
+            ['#tqm-pref-craft-capacity', 'showInspectorCraftCapacity'],
+            ['#tqm-pref-locked-rows', 'showLockedSkillRows'],
+            ['#tqm-pref-source-indicators', 'showCalculationSourceIndicators']
         ].forEach(([selector, key]) => {
             document.querySelector(selector)?.addEventListener(
                 'change',
                 event => {
                     updatePreference(key, Boolean(event.target.checked));
+
+                    if (
+                        key === 'itemInspectorEnabled' &&
+                        !Boolean(event.target.checked)
+                    ) {
+                        itemInspectorPinned = false;
+                        itemInspectorCompareItemName = '';
+                        hideItemInspector();
+                    }
+
                     renderActiveTab('mastery');
                 }
             );
@@ -11855,16 +12993,18 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
                 </header>
 
                 <nav class="tqm-tabs">
-                    <button data-tqm-tab="overview" class="tqm-active">Dashboard</button>
-                    <button data-tqm-tab="gathering">Gathering</button>
-                    <button data-tqm-tab="wood">Wood</button>
-                    <button data-tqm-tab="metal">Metal</button>
-                    <button data-tqm-tab="ammo">Ammunition</button>
+                    <button data-tqm-tab="overview" class="tqm-active">Overview</button>
+                    <button data-tqm-tab="gathering">Logging / Mining</button>
+                    <button data-tqm-tab="fishing">Fishing</button>
+                    <button data-tqm-tab="carpentry">Carpentry</button>
+                    <button data-tqm-tab="smelting">Smelting</button>
+                    <button data-tqm-tab="smithing">Smithing</button>
                     <button data-tqm-tab="cooking">Cooking</button>
+                    <button data-tqm-tab="crafting">Crafting</button>
                     <button data-tqm-tab="xp">XP Planner</button>
                     <button data-tqm-tab="planner">Queue Planner</button>
-                    <button data-tqm-tab="ship">Ship Builder</button>
                     <button data-tqm-tab="simulator">Mastery Simulator</button>
+                    <button data-tqm-tab="ship">Ship Builder</button>
                     ${state.developerMode
                         ? '<button data-tqm-tab="captured">Captured Data</button>'
                         : ''}
@@ -12201,7 +13341,7 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
         button.id = BUTTON_ID;
         button.type = 'button';
         button.textContent = 'Quartermaster';
-        button.title = 'Open Quartermaster’s Ledger';
+        button.title = 'Open Quartermaster Ledger';
         button.classList.add('tqm-floating-button');
 
         button.addEventListener('click', event => {
@@ -13259,6 +14399,14 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
             gap: 14px;
             margin-top: 18px;
             align-items: start;
+        }
+
+        .tqm-gathering-card-grid.tqm-gathering-1 {
+            grid-template-columns: 1fr;
+        }
+
+        .tqm-gathering-card-grid.tqm-gathering-2 {
+            grid-template-columns: repeat(2, minmax(0, 1fr));
         }
 
         .tqm-gathering-card-grid .tqm-gathering-group {
@@ -14550,6 +15698,92 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
             opacity: .48;
         }
 
+        #${OVERLAY_ID}.tqm-hide-locked-skill-rows .tqm-row-locked {
+            display: none !important;
+        }
+
+        .tqm-feature-toggle-row {
+            display: grid;
+            grid-template-columns: auto 1fr;
+            gap: 10px;
+            align-items: start;
+            padding: 9px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, .06);
+            cursor: pointer;
+        }
+
+        .tqm-feature-toggle-row:last-child {
+            border-bottom: 0;
+        }
+
+        .tqm-feature-toggle-row > input {
+            margin-top: 3px;
+        }
+
+        .tqm-feature-toggle-row > span {
+            display: grid;
+            gap: 2px;
+        }
+
+        .tqm-feature-toggle-row strong {
+            color: var(--text-primary, #e8e0d0);
+            font-size: 12px;
+        }
+
+        .tqm-feature-toggle-row small {
+            color: rgba(232, 224, 208, .58);
+            font-size: 10px;
+            line-height: 1.35;
+        }
+
+        .tqm-dev-feature-toggle {
+            margin-top: 8px;
+            padding-top: 10px;
+            border-top: 1px solid rgba(197, 160, 89, .18);
+        }
+
+        .tqm-calc-source-indicator {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 4px 7px;
+            margin-top: 4px;
+            font-size: 8px;
+            line-height: 1.2;
+            letter-spacing: .02em;
+        }
+
+        .tqm-calc-source-indicator > span {
+            white-space: nowrap;
+        }
+
+        .tqm-source-ok {
+            color: #8ddd61;
+        }
+
+        .tqm-source-warning {
+            color: #e8a55f;
+        }
+
+        .tqm-price-freshness {
+            display: block;
+            margin-top: 2px;
+            font-size: 9px;
+            font-weight: 700;
+            white-space: nowrap;
+        }
+
+        .tqm-freshness-fresh {
+            color: #8ddd61 !important;
+        }
+
+        .tqm-freshness-stale {
+            color: #e8a55f !important;
+        }
+
+        .tqm-freshness-fallback {
+            color: rgba(232, 224, 208, .42) !important;
+        }
+
         .tqm-market-outlier {
             display: block;
             color: #ef6b63;
@@ -14887,6 +16121,1302 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
 
     document.head.appendChild(style);
 
+
+    // =========================================================
+    // CTRL-HOVER ITEM INSPECTOR
+    // =========================================================
+
+    const ITEM_INSPECTOR_ID = 'tqm-item-inspector';
+    let itemInspectorCtrlHeld = false;
+    let itemInspectorPinned = false;
+    let itemInspectorItemName = '';
+    let itemInspectorPointerX = 0;
+    let itemInspectorPointerY = 0;
+    let itemInspectorLongPressTimer = 0;
+    let itemInspectorLongPressStart = null;
+    let itemInspectorDrag = null;
+    let itemInspectorCompareItemName = '';
+
+    function inventoryQuantityForItem(itemName) {
+        const wanted = normalizeName(itemName).toLowerCase();
+        if (!wanted) return 0;
+
+        const items = state.inventoryCache?.items || {};
+        const key = Object.keys(items).find(
+            name => normalizeName(name).toLowerCase() === wanted
+        );
+
+        return key ? Number(items[key] || 0) : 0;
+    }
+
+    function inspectorPriceRecord(itemName) {
+        const normalized = normalizeName(itemName);
+        if (!normalized) return null;
+
+        const names = [normalized];
+        if (normalized.endsWith('s')) {
+            names.push(normalized.slice(0, -1));
+        } else {
+            names.push(`${normalized}s`);
+        }
+
+        return findItemPrice(names);
+    }
+
+    function inspectorRecipeForItem(itemName) {
+        const wanted = normalizeName(itemName).toLowerCase();
+        if (!wanted) return null;
+
+        return plannerRecipeCatalog().find(
+            recipe => normalizeName(recipe.name).toLowerCase() === wanted
+        ) || null;
+    }
+
+    function itemNameFromInspectorTarget(target) {
+        const element = target?.nodeType === 1
+            ? target
+            : target?.parentElement;
+
+        if (!element) return '';
+
+        if (
+            element.closest?.(`#${ITEM_INSPECTOR_ID}`) ||
+            element.closest?.(`#${OVERLAY_ID}`) ||
+            element.closest?.(`#${BUTTON_ID}`) ||
+            element.closest?.(`#${VENDOR_BUTTON_ID}`)
+        ) {
+            return '';
+        }
+
+        const inventorySlot = element.closest?.(
+            '.sp-hold-slot:not(.sp-hold-slot--empty)'
+        );
+
+        if (inventorySlot) {
+            return normalizeName(
+                inventorySlot.getAttribute('title') ||
+                inventorySlot.querySelector('.sp-hold-slot-name')?.textContent ||
+                ''
+            );
+        }
+
+        const marketRow = element.closest?.(
+            'tr.mkt-row, [data-mkt-item], .mkt-row'
+        );
+
+        if (marketRow) {
+            return normalizeName(detectItemName(marketRow));
+        }
+
+        const namedElement = element.closest?.('[data-item-name]');
+        if (namedElement) {
+            return normalizeName(
+                namedElement.getAttribute('data-item-name') ||
+                namedElement.textContent ||
+                ''
+            );
+        }
+
+        const detail = element.closest?.(
+            '.mkt-detail-panel, #mkt-detail, [class*="mkt-detail"]'
+        );
+
+        if (detail) {
+            return normalizeName(
+                detail.querySelector(
+                    '.mkt-detail-title, .mkt-item-name, [data-mkt-detail-title], .mkt-detail-header h1, .mkt-detail-header h2, .mkt-detail-header h3'
+                )?.textContent ||
+                ''
+            );
+        }
+
+        return '';
+    }
+    function inspectorCraftAnalysis(itemName) {
+        const recipe = inspectorRecipeForItem(itemName);
+        if (!recipe) return null;
+
+        return calculateSharedCraftProfit(
+            recipe,
+            {
+                inputMode:
+                    recipe.skill === 'carpentry'
+                        ? 'opportunity'
+                        : 'purchase'
+            }
+        );
+    }
+
+    function inspectorGatheringAnalysis(itemName) {
+        const wanted = normalizeName(itemName).toLowerCase();
+        if (!wanted) return null;
+
+        const recipe = BUILT_IN_XP_RECIPES.find(candidate =>
+            ['logging', 'mining', 'fishing'].includes(candidate.skill) &&
+            normalizeName(candidate.item).toLowerCase() === wanted
+        );
+
+        if (!recipe) return null;
+
+        const cycle = adjustedCraftTime(
+            Number(recipe.cycle) || 0,
+            recipe.skill
+        );
+        const outputPerAction = yieldMultiplier(recipe.skill);
+        const outputRecord = inspectorPriceRecord(itemName);
+        const sale = bestSaleValue(outputRecord, outputPerAction);
+        const saleValue = Number(sale.value);
+
+        const inputs = (recipe.ingredients || []).map(ingredient => {
+            const quantity = Math.max(0, Number(ingredient.quantity) || 0);
+            const record = inspectorPriceRecord(ingredient.name);
+            const purchase = resolveCraftInputCost(record, quantity);
+
+            return {
+                name: ingredient.name,
+                quantity,
+                record,
+                value: Number(purchase.value),
+                source: purchase.source || 'Unavailable'
+            };
+        });
+
+        const allInputsKnown = inputs.every(input =>
+            Number.isFinite(input.value)
+        );
+        const inputCost = allInputsKnown
+            ? inputs.reduce((sum, input) => sum + input.value, 0)
+            : NaN;
+        const profitPerAction =
+            Number.isFinite(saleValue) && Number.isFinite(inputCost)
+                ? saleValue - inputCost
+                : NaN;
+        const profitPerHour =
+            Number.isFinite(profitPerAction) && cycle > 0
+                ? goldPerHour(profitPerAction, cycle)
+                : NaN;
+
+        return {
+            recipe,
+            cycle,
+            outputPerAction,
+            inputs,
+            inputCost,
+            saleValue,
+            saleSource: sale.source || 'Unavailable',
+            outputRecord,
+            freshness: priceFreshnessInfo([
+                outputRecord,
+                ...inputs.map(input => input.record)
+            ]),
+            profitPerAction,
+            profitPerHour
+        };
+    }
+
+
+    function inspectorComparableMetrics(itemName) {
+        const record = inspectorPriceRecord(itemName);
+        const instant = bestSaleValue(record, 1);
+        const craft = inspectorCraftAnalysis(itemName);
+        const gathering = inspectorGatheringAnalysis(itemName);
+
+        return {
+            itemName,
+            owned: inventoryQuantityForItem(itemName),
+            instantValue: Number(instant.value),
+            instantSource: instant.source || 'Unavailable',
+            profitPerAction: craft
+                ? Number(craft.profitPerAction)
+                : gathering
+                    ? Number(gathering.profitPerAction)
+                    : NaN,
+            profitPerHour: craft
+                ? Number(craft.profitPerHour)
+                : gathering
+                    ? Number(gathering.profitPerHour)
+                    : NaN
+        };
+    }
+
+    function buildInspectorComparisonHtml(baseItemName) {
+        const preferences = {
+            ...DEFAULT_STATE.preferences,
+            ...(state.preferences || {})
+        };
+
+        if (
+            !itemInspectorPinned ||
+            !preferences.pinnedComparisonEnabled
+        ) {
+            return '';
+        }
+
+        const compareName = normalizeName(
+            itemInspectorCompareItemName
+        );
+
+        if (
+            !compareName ||
+            compareName.toLowerCase() ===
+                normalizeName(baseItemName).toLowerCase()
+        ) {
+            return `
+                <div class="tqm-inspector-section-title">
+                    Comparison
+                </div>
+                <div class="tqm-inspector-empty">
+                    Hold Ctrl over another item to compare it with this pinned item.
+                </div>
+            `;
+        }
+
+        const base =
+            inspectorComparableMetrics(baseItemName);
+        const compare =
+            inspectorComparableMetrics(compareName);
+        const formatMetric = (value, formatter) =>
+            Number.isFinite(value)
+                ? formatter(value)
+                : '—';
+
+        return `
+            <div class="tqm-inspector-section-title">
+                Comparison
+            </div>
+            <div class="tqm-compare-grid tqm-compare-head">
+                <span></span>
+                <strong>${escapeHtml(baseItemName)}</strong>
+                <strong>${escapeHtml(compareName)}</strong>
+            </div>
+            <div class="tqm-compare-grid">
+                <span>Owned</span>
+                <strong>${base.owned.toLocaleString()}</strong>
+                <strong>${compare.owned.toLocaleString()}</strong>
+            </div>
+            <div class="tqm-compare-grid">
+                <span>Instant exit</span>
+                <strong>${formatMetric(
+                    base.instantValue,
+                    value => formatGold(
+                        value,
+                        { allowZero: true }
+                    )
+                )}</strong>
+                <strong>${formatMetric(
+                    compare.instantValue,
+                    value => formatGold(
+                        value,
+                        { allowZero: true }
+                    )
+                )}</strong>
+            </div>
+            <div class="tqm-compare-grid">
+                <span>Profit/action</span>
+                <strong>${formatMetric(
+                    base.profitPerAction,
+                    signedMoney
+                )}</strong>
+                <strong>${formatMetric(
+                    compare.profitPerAction,
+                    signedMoney
+                )}</strong>
+            </div>
+            <div class="tqm-compare-grid">
+                <span>Profit/hr</span>
+                <strong>${formatMetric(
+                    base.profitPerHour,
+                    signedMoneyPerHour
+                )}</strong>
+                <strong>${formatMetric(
+                    compare.profitPerHour,
+                    signedMoneyPerHour
+                )}</strong>
+            </div>
+        `;
+    }
+
+    function inspectorSignedClass(value) {
+        if (!Number.isFinite(value)) return '';
+        return value >= 0
+            ? 'tqm-inspector-positive'
+            : 'tqm-inspector-negative';
+    }
+    function buildItemInspectorHtml(itemName) {
+        const record = inspectorPriceRecord(itemName);
+        const ask = Number(record?.ask || 0);
+        const bid = Number(record?.bid || 0);
+        const vendor = Number(
+            record?.vendorPrice ||
+            builtInVendorPrice(itemName) ||
+            0
+        );
+        const owned = inventoryQuantityForItem(itemName);
+        const listNet = ask > 0 ? netPrice(ask) : NaN;
+        const instant = bestSaleValue(record, 1);
+        const craft = inspectorCraftAnalysis(itemName);
+        const gathering = inspectorGatheringAnalysis(itemName);
+        const freshness = priceFreshnessInfo(record);
+        const ownedValue =
+            owned > 0 &&
+            Number.isFinite(listNet)
+                ? owned * listNet
+                : owned > 0 &&
+                    Number.isFinite(Number(instant.value))
+                    ? owned * Number(instant.value)
+                    : NaN;
+
+        const ingredientHtml = craft
+            ? craft.ingredients.map(ingredient => `
+                <div class="tqm-inspector-subrow">
+                    <span>
+                        ${escapeHtml(
+                            `${ingredient.quantity}× ${ingredient.name}`
+                        )}
+                    </span>
+                    <strong>
+                        ${Number.isFinite(ingredient.value)
+                            ? formatGold(
+                                ingredient.value,
+                                { allowZero: true }
+                            )
+                            : '—'}
+                    </strong>
+                </div>
+            `).join('')
+            : '';
+
+        const preferences = {
+            ...DEFAULT_STATE.preferences,
+            ...(state.preferences || {})
+        };
+
+        const capacityHtml =
+            craft &&
+            preferences.showInspectorCraftCapacity
+            ? `
+                <div class="tqm-inspector-section-title">
+                    Craft Capacity
+                </div>
+                ${craft.ingredients.map(ingredient => `
+                    <div class="tqm-inspector-subrow">
+                        <span>${escapeHtml(ingredient.name)} owned</span>
+                        <strong>
+                            ${Number(
+                                ingredient.owned || 0
+                            ).toLocaleString()}
+                            / ${Number(
+                                ingredient.quantity || 0
+                            ).toLocaleString(undefined, {
+                                maximumFractionDigits: 2
+                            })}
+                        </strong>
+                    </div>
+                `).join('')}
+                <div class="tqm-inspector-row">
+                    <span>Actions available</span>
+                    <strong>
+                        ${Number(
+                            craft.maxActions || 0
+                        ).toLocaleString()}
+                    </strong>
+                </div>
+                <div class="tqm-inspector-row">
+                    <span>Max craftable</span>
+                    <strong>
+                        ${Number(
+                            craft.maxCraftable || 0
+                        ).toLocaleString(undefined, {
+                            maximumFractionDigits: 2
+                        })}
+                    </strong>
+                </div>
+                ${craft.missingMaterials.length
+                    ? craft.missingMaterials.map(ingredient => `
+                        <div class="tqm-inspector-row tqm-inspector-negative">
+                            <span>
+                                Missing ${escapeHtml(ingredient.name)}
+                            </span>
+                            <strong>
+                                ${Number(
+                                    ingredient.missingForNextAction || 0
+                                ).toLocaleString(undefined, {
+                                    maximumFractionDigits: 2
+                                })}
+                            </strong>
+                        </div>
+                    `).join('')
+                    : `
+                        <div class="tqm-inspector-source">
+                            Enough materials for the next action
+                        </div>
+                    `}
+            `
+            : '';
+
+        const lockedHtml = craft?.locked
+            ? `
+                <div class="tqm-inspector-row tqm-inspector-negative">
+                    <span>Status</span>
+                    <strong>
+                        Locked · ${escapeHtml(
+                            craft.recipe.skill
+                        )} Lv. ${Number(
+                            craft.recipe.requiredLevel || 1
+                        )}
+                    </strong>
+                </div>
+            `
+            : '';
+
+        return `
+            <div class="tqm-inspector-header">
+                <div>
+                    <small>Quartermaster</small>
+                    <strong>${escapeHtml(itemName)}</strong>
+                </div>
+                <button
+                    type="button"
+                    class="tqm-inspector-close"
+                    title="Close"
+                >×</button>
+            </div>
+
+            <div class="tqm-inspector-body">
+                <div class="tqm-inspector-section-title">
+                    Market
+                </div>
+                <div class="tqm-inspector-row">
+                    <span>Ask</span>
+                    <strong>
+                        ${ask > 0 ? formatGold(ask) : '—'}
+                    </strong>
+                </div>
+                <div class="tqm-inspector-row">
+                    <span>Bid</span>
+                    <strong>
+                        ${bid > 0 ? formatGold(bid) : '—'}
+                    </strong>
+                </div>
+                <div class="tqm-inspector-row">
+                    <span>Vendor</span>
+                    <strong>
+                        ${vendor > 0 ? formatGold(vendor) : '—'}
+                    </strong>
+                </div>
+                <div class="tqm-inspector-row">
+                    <span>After tax @ Ask</span>
+                    <strong>
+                        ${Number.isFinite(listNet)
+                            ? formatGold(listNet)
+                            : '—'}
+                    </strong>
+                </div>
+                <div class="tqm-inspector-row">
+                    <span>Best instant exit</span>
+                    <strong>
+                        ${Number.isFinite(Number(instant.value)) &&
+                        Number(instant.value) > 0
+                            ? formatGold(Number(instant.value))
+                            : '—'}
+                    </strong>
+                </div>
+                <div class="tqm-inspector-source">
+                    ${escapeHtml(
+                        instant.source || 'Unavailable'
+                    )}
+                </div>
+                ${preferences.showPriceFreshness ? `
+                    <div class="tqm-inspector-row">
+                        <span>Price freshness</span>
+                        <strong class="${freshness.className}">
+                            ${escapeHtml(freshness.label)}
+                        </strong>
+                    </div>
+                ` : ''}
+
+                ${calculationSourceIndicator({
+                    source: instant.source || '',
+                    recordOrRecords: freshness,
+                    includeInventory: true,
+                    includeRecipe: false
+                })}
+
+                <div class="tqm-inspector-section-title">
+                    Inventory
+                </div>
+                <div class="tqm-inspector-row">
+                    <span>Owned</span>
+                    <strong>${owned.toLocaleString()}</strong>
+                </div>
+                <div class="tqm-inspector-row">
+                    <span>Net value</span>
+                    <strong>
+                        ${Number.isFinite(ownedValue)
+                            ? formatGold(
+                                ownedValue,
+                                { allowZero: true }
+                            )
+                            : '—'}
+                    </strong>
+                </div>
+
+                ${craft ? `
+                    <div class="tqm-inspector-section-title">
+                        Crafting
+                    </div>
+                    ${lockedHtml}
+                    ${ingredientHtml}
+                    ${craft.fee > 0 ? `
+                        <div class="tqm-inspector-subrow">
+                            <span>Supply fee</span>
+                            <strong>${formatGold(craft.fee)}</strong>
+                        </div>
+                    ` : ''}
+                    <div class="tqm-inspector-row">
+                        <span>Input basis</span>
+                        <strong>
+                            ${craft.inputMode === 'opportunity'
+                                ? 'Opportunity cost'
+                                : 'Market purchase'}
+                        </strong>
+                    </div>
+                    <div class="tqm-inspector-row">
+                        <span>Your yield</span>
+                        <strong>
+                            ${formatPercent(
+                                yieldMasteryPercent(
+                                    craft.recipe.skill
+                                )
+                            )}
+                        </strong>
+                    </div>
+                    <div class="tqm-inspector-row">
+                        <span>Output / action</span>
+                        <strong>
+                            ${craft.outputPerBatch.toLocaleString(
+                                undefined,
+                                {
+                                    maximumFractionDigits: 2
+                                }
+                            )}
+                        </strong>
+                    </div>
+                    <div class="tqm-inspector-row">
+                        <span>Craft time</span>
+                        <strong>
+                            ${formatCycleSeconds(craft.cycle)}
+                        </strong>
+                    </div>
+                    <div class="tqm-inspector-row">
+                        <span>Input value / item</span>
+                        <strong>
+                            ${Number.isFinite(craft.costPerItem)
+                                ? formatGold(
+                                    craft.costPerItem,
+                                    { allowZero: true }
+                                )
+                                : '—'}
+                        </strong>
+                    </div>
+                    <div class="tqm-inspector-row ${inspectorSignedClass(
+                        craft.profitPerAction
+                    )}">
+                        <span>Profit / action</span>
+                        <strong>
+                            ${Number.isFinite(
+                                craft.profitPerAction
+                            )
+                                ? signedMoney(
+                                    craft.profitPerAction
+                                )
+                                : '—'}
+                        </strong>
+                    </div>
+                    <div class="tqm-inspector-row ${inspectorSignedClass(
+                        craft.profitPerItem
+                    )}">
+                        <span>Profit / item</span>
+                        <strong>
+                            ${Number.isFinite(
+                                craft.profitPerItem
+                            )
+                                ? signedMoney(
+                                    craft.profitPerItem
+                                )
+                                : '—'}
+                        </strong>
+                    </div>
+                    <div class="tqm-inspector-row ${inspectorSignedClass(
+                        craft.profitPerHour
+                    )}">
+                        <span>Profit / hour</span>
+                        <strong>
+                            ${Number.isFinite(
+                                craft.profitPerHour
+                            )
+                                ? signedMoneyPerHour(
+                                    craft.profitPerHour
+                                )
+                                : '—'}
+                        </strong>
+                    </div>
+                    <div class="tqm-inspector-source">
+                        Sell: ${escapeHtml(
+                            craft.instantSource ||
+                            'Unavailable'
+                        )}
+                    </div>
+                    ${preferences.showPriceFreshness ? `
+                        <div class="tqm-inspector-source">
+                            Calculation data:
+                            ${escapeHtml(craft.freshness.label)}
+                        </div>
+                    ` : ''}
+
+                    ${calculationSourceIndicator({
+                        source: craft.instantSource || '',
+                        recordOrRecords: craft.freshness,
+                        skill: craft.recipe?.skill || '',
+                        includeInventory:
+                            Boolean(preferences.showInspectorCraftCapacity),
+                        includeRecipe: true
+                    })}
+
+                    ${capacityHtml}
+                ` : gathering ? `
+                    <div class="tqm-inspector-section-title">
+                        Gathering
+                    </div>
+                    ${gathering.inputs.map(input => `
+                        <div class="tqm-inspector-subrow">
+                            <span>
+                                ${escapeHtml(
+                                    `${input.quantity}× ${input.name}`
+                                )}
+                            </span>
+                            <strong>
+                                ${Number.isFinite(input.value)
+                                    ? formatGold(
+                                        input.value,
+                                        { allowZero: true }
+                                    )
+                                    : '—'}
+                            </strong>
+                        </div>
+                    `).join('')}
+                    <div class="tqm-inspector-row">
+                        <span>Your yield</span>
+                        <strong>
+                            ${gathering.outputPerAction.toLocaleString(
+                                undefined,
+                                {
+                                    maximumFractionDigits: 2
+                                }
+                            )}
+                        </strong>
+                    </div>
+                    <div class="tqm-inspector-row">
+                        <span>Action time</span>
+                        <strong>
+                            ${formatCycleSeconds(
+                                gathering.cycle
+                            )}
+                        </strong>
+                    </div>
+                    <div class="tqm-inspector-row">
+                        <span>Sell / action</span>
+                        <strong>
+                            ${Number.isFinite(
+                                gathering.saleValue
+                            )
+                                ? formatGold(
+                                    gathering.saleValue,
+                                    { allowZero: true }
+                                )
+                                : '—'}
+                        </strong>
+                    </div>
+                    <div class="tqm-inspector-row ${inspectorSignedClass(
+                        gathering.profitPerHour
+                    )}">
+                        <span>Profit / hour</span>
+                        <strong>
+                            ${Number.isFinite(
+                                gathering.profitPerHour
+                            )
+                                ? signedMoneyPerHour(
+                                    gathering.profitPerHour
+                                )
+                                : '—'}
+                        </strong>
+                    </div>
+                    <div class="tqm-inspector-source">
+                        Sell: ${escapeHtml(
+                            gathering.saleSource ||
+                            'Unavailable'
+                        )}
+                    </div>
+                    ${preferences.showPriceFreshness ? `
+                        <div class="tqm-inspector-source">
+                            Calculation data:
+                            ${escapeHtml(
+                                gathering.freshness.label
+                            )}
+                        </div>
+                    ` : ''}
+
+                    ${calculationSourceIndicator({
+                        source: gathering.saleSource || '',
+                        recordOrRecords: gathering.freshness,
+                        skill: gathering.recipe?.skill || '',
+                        includeInventory: false,
+                        includeRecipe: true
+                    })}
+                ` : `
+                    <div class="tqm-inspector-empty">
+                        No Quartermaster crafting or gathering recipe for this item.
+                    </div>
+                `}
+
+                ${buildInspectorComparisonHtml(itemName)}
+            </div>
+
+            <div class="tqm-inspector-footer">
+                ${itemInspectorPinned
+                    ? (
+                        preferences.pinnedComparisonEnabled
+                            ? 'Pinned · drag header · Ctrl-hover another item to compare · × to close'
+                            : 'Pinned · drag header · × to close'
+                    )
+                    : 'Click inspector to pin · release Ctrl to close'}
+            </div>
+        `;
+    }
+
+    function ensureItemInspector() {
+        let inspector = document.getElementById(ITEM_INSPECTOR_ID);
+        if (inspector) return inspector;
+
+        inspector = document.createElement('div');
+        inspector.id = ITEM_INSPECTOR_ID;
+        inspector.className = 'tqm-item-inspector';
+        inspector.style.display = 'none';
+        document.body.appendChild(inspector);
+
+        inspector.addEventListener('click', event => {
+            if (event.target.closest('.tqm-inspector-close')) {
+                itemInspectorPinned = false;
+                itemInspectorCompareItemName = '';
+                hideItemInspector();
+                event.preventDefault();
+                event.stopPropagation();
+                return;
+            }
+
+            // The live inspector stays fixed after opening, so the user can
+            // move the pointer onto it. A single click pins the current item.
+            if (!itemInspectorPinned) {
+                itemInspectorPinned = true;
+                inspector.classList.add(
+                    'tqm-item-inspector-pinned'
+                );
+                renderItemInspector(
+                    itemInspectorItemName,
+                    true
+                );
+            }
+
+            event.preventDefault();
+            event.stopPropagation();
+        });
+
+        inspector.addEventListener('pointerdown', event => {
+            if (!itemInspectorPinned) return;
+            if (!event.target.closest('.tqm-inspector-header')) return;
+            if (event.target.closest('.tqm-inspector-close')) return;
+            if (event.button !== 0 && event.pointerType === 'mouse') return;
+
+            const rect = inspector.getBoundingClientRect();
+            itemInspectorDrag = {
+                pointerId: event.pointerId,
+                offsetX: event.clientX - rect.left,
+                offsetY: event.clientY - rect.top
+            };
+
+            inspector.setPointerCapture?.(event.pointerId);
+            inspector.classList.add('tqm-item-inspector-dragging');
+            event.preventDefault();
+            event.stopPropagation();
+        });
+
+        inspector.addEventListener('pointermove', event => {
+            if (!itemInspectorDrag ||
+                itemInspectorDrag.pointerId !== event.pointerId) return;
+
+            const margin = 8;
+            const width = inspector.offsetWidth || 340;
+            const height = inspector.offsetHeight || 420;
+            const maxLeft = Math.max(margin, window.innerWidth - width - margin);
+            const maxTop = Math.max(margin, window.innerHeight - height - margin);
+            const left = Math.min(
+                maxLeft,
+                Math.max(margin, event.clientX - itemInspectorDrag.offsetX)
+            );
+            const top = Math.min(
+                maxTop,
+                Math.max(margin, event.clientY - itemInspectorDrag.offsetY)
+            );
+
+            inspector.style.left = `${left}px`;
+            inspector.style.top = `${top}px`;
+            event.preventDefault();
+            event.stopPropagation();
+        });
+
+        const stopInspectorDrag = event => {
+            if (!itemInspectorDrag ||
+                itemInspectorDrag.pointerId !== event.pointerId) return;
+
+            try {
+                inspector.releasePointerCapture?.(event.pointerId);
+            } catch {}
+
+            itemInspectorDrag = null;
+            inspector.classList.remove('tqm-item-inspector-dragging');
+            event.preventDefault();
+            event.stopPropagation();
+        };
+
+        inspector.addEventListener('pointerup', stopInspectorDrag);
+        inspector.addEventListener('pointercancel', stopInspectorDrag);
+
+        return inspector;
+    }
+
+    function positionItemInspector(inspector) {
+        if (!inspector) return;
+
+        const margin = 12;
+        const offset = 18;
+        const width = inspector.offsetWidth || 330;
+        const height = inspector.offsetHeight || 420;
+        let left = itemInspectorPointerX + offset;
+        let top = itemInspectorPointerY + offset;
+
+        if (left + width + margin > window.innerWidth) {
+            left = Math.max(margin, itemInspectorPointerX - width - offset);
+        }
+        if (top + height + margin > window.innerHeight) {
+            top = Math.max(margin, window.innerHeight - height - margin);
+        }
+
+        inspector.style.left = `${Math.max(margin, left)}px`;
+        inspector.style.top = `${Math.max(margin, top)}px`;
+    }
+    function renderItemInspector(
+        itemName,
+        preservePosition = false
+    ) {
+        const normalized = normalizeName(itemName);
+        if (!normalized) return;
+
+        scanGameInventory();
+        itemInspectorItemName = normalized;
+
+        const inspector = ensureItemInspector();
+        const wasVisible =
+            inspector.style.display === 'block';
+        const previousLeft =
+            inspector.style.left;
+        const previousTop =
+            inspector.style.top;
+
+        inspector.innerHTML =
+            buildItemInspectorHtml(normalized);
+        inspector.style.display = 'block';
+        inspector.classList.toggle(
+            'tqm-item-inspector-pinned',
+            itemInspectorPinned
+        );
+
+        if (
+            preservePosition &&
+            wasVisible &&
+            previousLeft &&
+            previousTop
+        ) {
+            inspector.style.left = previousLeft;
+            inspector.style.top = previousTop;
+            return;
+        }
+
+        requestAnimationFrame(
+            () => positionItemInspector(inspector)
+        );
+    }
+
+    function hideItemInspector() {
+        const inspector = document.getElementById(ITEM_INSPECTOR_ID);
+        if (inspector) inspector.style.display = 'none';
+        if (!itemInspectorPinned) itemInspectorItemName = '';
+    }
+
+    const itemInspectorStyle = document.createElement('style');
+    itemInspectorStyle.textContent = `
+        #${ITEM_INSPECTOR_ID} {
+            position: fixed;
+            z-index: 10000020;
+            width: min(340px, calc(100vw - 24px));
+            max-height: calc(100vh - 24px);
+            overflow: auto;
+            color: var(--text-primary, #e8e0d0);
+            background: rgba(19, 22, 24, .985);
+            border: 1px solid rgba(197, 160, 89, .72);
+            border-radius: 7px;
+            box-shadow: 0 10px 34px rgba(0, 0, 0, .72), 0 0 16px rgba(197, 160, 89, .13);
+            font-family: var(--font-body, "Gothic A1", sans-serif);
+            font-size: 12px;
+            user-select: none;
+        }
+
+        #${ITEM_INSPECTOR_ID}.tqm-item-inspector-pinned {
+            border-color: rgba(224, 195, 106, .95);
+            box-shadow: 0 12px 38px rgba(0, 0, 0, .78), 0 0 18px rgba(224, 195, 106, .19);
+        }
+
+        #${ITEM_INSPECTOR_ID} .tqm-inspector-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 10px 11px;
+            background: linear-gradient(180deg, rgba(35, 31, 23, .98), rgba(12, 14, 16, .98));
+            border-bottom: 1px solid rgba(197, 160, 89, .32);
+            cursor: default;
+        }
+
+        #${ITEM_INSPECTOR_ID}.tqm-item-inspector-pinned .tqm-inspector-header {
+            cursor: move;
+            touch-action: none;
+        }
+
+        #${ITEM_INSPECTOR_ID}.tqm-item-inspector-dragging .tqm-inspector-header {
+            cursor: grabbing;
+        }
+
+        #${ITEM_INSPECTOR_ID} .tqm-inspector-header > div {
+            display: grid;
+            gap: 2px;
+            min-width: 0;
+        }
+
+        #${ITEM_INSPECTOR_ID} .tqm-inspector-header small {
+            color: rgba(197, 160, 89, .72);
+            font-size: 9px;
+            font-weight: 800;
+            letter-spacing: .12em;
+            text-transform: uppercase;
+        }
+
+        #${ITEM_INSPECTOR_ID} .tqm-inspector-header strong {
+            color: var(--gold, #c5a059);
+            font-family: var(--font-heading, Georgia, serif);
+            font-size: 15px;
+            letter-spacing: .03em;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        #${ITEM_INSPECTOR_ID} .tqm-inspector-close {
+            width: 26px;
+            height: 26px;
+            flex: 0 0 auto;
+            padding: 0;
+            border: 1px solid rgba(255, 255, 255, .13);
+            border-radius: 50%;
+            color: rgba(255, 255, 255, .62);
+            background: rgba(255, 255, 255, .04);
+            cursor: pointer;
+            font-size: 17px;
+            line-height: 1;
+        }
+
+        #${ITEM_INSPECTOR_ID} .tqm-inspector-body {
+            padding: 8px 11px 10px;
+        }
+
+        #${ITEM_INSPECTOR_ID} .tqm-inspector-section-title {
+            margin: 9px 0 4px;
+            padding-bottom: 4px;
+            color: rgba(197, 160, 89, .82);
+            border-bottom: 1px solid rgba(197, 160, 89, .17);
+            font-size: 9px;
+            font-weight: 800;
+            letter-spacing: .12em;
+            text-transform: uppercase;
+        }
+
+        #${ITEM_INSPECTOR_ID} .tqm-inspector-row,
+        #${ITEM_INSPECTOR_ID} .tqm-inspector-subrow {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            gap: 12px;
+            align-items: baseline;
+            padding: 3px 0;
+        }
+
+        #${ITEM_INSPECTOR_ID} .tqm-inspector-row span,
+        #${ITEM_INSPECTOR_ID} .tqm-inspector-subrow span {
+            color: rgba(232, 224, 208, .68);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        #${ITEM_INSPECTOR_ID} .tqm-inspector-row strong,
+        #${ITEM_INSPECTOR_ID} .tqm-inspector-subrow strong {
+            color: rgba(232, 224, 208, .96);
+            text-align: right;
+        }
+
+        #${ITEM_INSPECTOR_ID} .tqm-inspector-subrow {
+            padding-left: 8px;
+            font-size: 11px;
+        }
+
+        #${ITEM_INSPECTOR_ID} .tqm-inspector-source {
+            margin-top: -1px;
+            color: rgba(232, 224, 208, .43);
+            font-size: 9px;
+            text-align: right;
+        }
+
+        #${ITEM_INSPECTOR_ID} .tqm-inspector-positive strong {
+            color: #aee67a;
+        }
+
+        #${ITEM_INSPECTOR_ID} .tqm-inspector-negative strong {
+            color: #ff8b83;
+        }
+
+        #${ITEM_INSPECTOR_ID} .tqm-inspector-empty {
+            margin-top: 8px;
+            color: rgba(232, 224, 208, .48);
+            font-size: 10px;
+        }
+
+
+        #${ITEM_INSPECTOR_ID} .tqm-compare-grid {
+            display: grid;
+            grid-template-columns:
+                minmax(76px, .8fr)
+                minmax(92px, 1fr)
+                minmax(92px, 1fr);
+            gap: 8px;
+            align-items: baseline;
+            padding: 3px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, .035);
+        }
+
+        #${ITEM_INSPECTOR_ID} .tqm-compare-grid > span {
+            color: rgba(232, 224, 208, .55);
+            font-size: 10px;
+        }
+
+        #${ITEM_INSPECTOR_ID} .tqm-compare-grid > strong {
+            min-width: 0;
+            color: rgba(232, 224, 208, .92);
+            font-size: 10px;
+            text-align: right;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        #${ITEM_INSPECTOR_ID} .tqm-compare-head > strong {
+            color: var(--gold, #c5a059);
+            font-size: 9px;
+        }
+
+        #${ITEM_INSPECTOR_ID} .tqm-inspector-footer {
+            padding: 7px 10px;
+            color: rgba(232, 224, 208, .48);
+            background: rgba(255, 255, 255, .025);
+            border-top: 1px solid rgba(255, 255, 255, .06);
+            font-size: 9px;
+            text-align: center;
+            letter-spacing: .03em;
+        }
+    `;
+    document.head.appendChild(itemInspectorStyle);
+
+    /* Escape is left entirely to Tidefall. Use × to close a pinned inspector. */
+
+    document.addEventListener('pointermove', event => {
+        itemInspectorPointerX = event.clientX;
+        itemInspectorPointerY = event.clientY;
+
+        if (itemInspectorLongPressStart) {
+            const dx = event.clientX - itemInspectorLongPressStart.x;
+            const dy = event.clientY - itemInspectorLongPressStart.y;
+            if (Math.hypot(dx, dy) > 12) {
+                window.clearTimeout(itemInspectorLongPressTimer);
+                itemInspectorLongPressTimer = 0;
+                itemInspectorLongPressStart = null;
+            }
+        }
+
+        // Intentionally do not move the inspector with every pointer event.
+        // It is positioned when opened/when the hovered item changes, which
+        // leaves it stationary long enough to move onto and click to pin.
+    }, { passive: true });
+
+    document.addEventListener('pointerover', event => {
+        const preferences = {
+            ...DEFAULT_STATE.preferences,
+            ...(state.preferences || {})
+        };
+
+        if (!preferences.itemInspectorEnabled) {
+            if (!itemInspectorPinned) {
+                hideItemInspector();
+            }
+            return;
+        }
+
+        if (event.target?.closest?.(`#${ITEM_INSPECTOR_ID}`)) return;
+
+        const itemName = itemNameFromInspectorTarget(event.target);
+
+        if (!itemName) {
+            if (itemInspectorCtrlHeld && !itemInspectorPinned) {
+                hideItemInspector();
+            }
+            return;
+        }
+
+        if (itemInspectorPinned) {
+            if (
+                preferences.pinnedComparisonEnabled &&
+                itemInspectorCtrlHeld &&
+                normalizeName(itemName).toLowerCase() !==
+                    normalizeName(itemInspectorItemName).toLowerCase()
+            ) {
+                itemInspectorCompareItemName = itemName;
+                renderItemInspector(
+                    itemInspectorItemName,
+                    true
+                );
+            }
+            return;
+        }
+
+        const inspector =
+            document.getElementById(ITEM_INSPECTOR_ID);
+        const sameVisibleItem =
+            normalizeName(itemInspectorItemName).toLowerCase() ===
+                normalizeName(itemName).toLowerCase() &&
+            inspector?.style.display === 'block';
+
+        itemInspectorItemName = itemName;
+
+        if (
+            itemInspectorCtrlHeld &&
+            !sameVisibleItem
+        ) {
+            renderItemInspector(itemName);
+        }
+    }, { passive: true });
+
+    document.addEventListener('keydown', event => {
+        if (event.key !== 'Control') return;
+
+        const preferences = {
+            ...DEFAULT_STATE.preferences,
+            ...(state.preferences || {})
+        };
+
+        if (!preferences.itemInspectorEnabled) return;
+        if (itemInspectorCtrlHeld) return;
+
+        itemInspectorCtrlHeld = true;
+        const target = document.elementFromPoint(
+            itemInspectorPointerX,
+            itemInspectorPointerY
+        );
+        const itemName = itemNameFromInspectorTarget(target);
+
+        if (
+            itemName &&
+            itemInspectorPinned &&
+            preferences.pinnedComparisonEnabled &&
+            normalizeName(itemName).toLowerCase() !==
+                normalizeName(itemInspectorItemName).toLowerCase()
+        ) {
+            itemInspectorCompareItemName = itemName;
+            renderItemInspector(
+                itemInspectorItemName,
+                true
+            );
+            return;
+        }
+
+        if (itemName && !itemInspectorPinned) {
+            renderItemInspector(itemName);
+        }
+    });
+
+    document.addEventListener('keyup', event => {
+        if (event.key !== 'Control') return;
+        itemInspectorCtrlHeld = false;
+
+        if (!itemInspectorPinned) {
+            hideItemInspector();
+        }
+    });
+
+    document.addEventListener('pointerdown', event => {
+        if (event.pointerType === 'mouse') return;
+
+        const preferences = {
+            ...DEFAULT_STATE.preferences,
+            ...(state.preferences || {})
+        };
+
+        if (!preferences.itemInspectorEnabled) return;
+        if (event.target?.closest?.(`#${ITEM_INSPECTOR_ID}`)) return;
+
+        const itemName = itemNameFromInspectorTarget(event.target);
+        if (!itemName) return;
+
+        window.clearTimeout(itemInspectorLongPressTimer);
+        itemInspectorLongPressStart = {
+            x: event.clientX,
+            y: event.clientY,
+            itemName
+        };
+        itemInspectorPointerX = event.clientX;
+        itemInspectorPointerY = event.clientY;
+
+        itemInspectorLongPressTimer = window.setTimeout(() => {
+            itemInspectorPinned = true;
+            renderItemInspector(itemName);
+            itemInspectorLongPressTimer = 0;
+            itemInspectorLongPressStart = null;
+        }, 550);
+    }, { passive: true });
+
+    const cancelItemInspectorLongPress = () => {
+        window.clearTimeout(itemInspectorLongPressTimer);
+        itemInspectorLongPressTimer = 0;
+        itemInspectorLongPressStart = null;
+    };
+
+    document.addEventListener('pointerup', cancelItemInspectorLongPress, { passive: true });
+    document.addEventListener('pointercancel', cancelItemInspectorLongPress, { passive: true });
+
     createHeaderButton();
     createJournal();
 
@@ -15095,6 +17625,13 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
     );
 
     document.addEventListener('keydown', event => {
-        if (event.key === 'Escape') closeOverlay();
+        if (event.key !== 'Escape') return;
+
+        // Inspector Escape is handled earlier in capture phase. If no
+        // inspector is visible, preserve Quartermaster's normal overlay close.
+        const overlay = document.getElementById(OVERLAY_ID);
+        if (overlay?.classList.contains('tqm-open')) {
+            closeOverlay();
+        }
     });
 })();
