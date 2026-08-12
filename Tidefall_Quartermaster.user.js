@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tidefall Quartermaster
 // @namespace    tidefall-quartermaster
-// @version      1.0.20.4
+// @version      1.0.20.5
 // @description  Standalone Exchange reader and mastery-aware profit advisor for Tidefall
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=playtidefall.com
 // @updateURL    https://raw.githubusercontent.com/UserCarl/tidefall-quartermaster/main/Tidefall_Quartermaster.user.js
@@ -13,8 +13,8 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.0.20.4';
-    const BUILD_ID = '2026-08-12-read-xp-button-fix';
+    const VERSION = '1.0.20.5';
+    const BUILD_ID = '2026-08-12-manual-smithing-xp';
     const STORAGE_KEY = 'tf-quartermaster-v1';
     const BUTTON_ID = 'tf-quartermaster-button';
     const VENDOR_BUTTON_ID = 'tf-quartermaster-vendor-button';
@@ -729,8 +729,8 @@
 
     const SHOT_REQUIRED_LEVELS = {
         Copper: 1,
-        Iron: 10,
-        Cinder: 15,
+        Iron: 5,
+        Cinder: 10,
         Darkiron: 20,
         Mithril: 30,
         Adamantite: 40,
@@ -858,6 +858,61 @@
         { skill: 'smelting', item: 'Stormglass Bar', level: 70, xp: 48, cycle: 44, ingredients: [{ name: 'Stormglass Ore', quantity: 2 }] },
         { skill: 'smelting', item: 'Leviathan Bar', level: 75, xp: 58, cycle: 50, ingredients: [{ name: 'Leviathan Ore', quantity: 2 }] },
         { skill: 'smelting', item: 'Abyssal Bar', level: 90, xp: 72, cycle: 60, ingredients: [{ name: 'Abyssal Ore', quantity: 2 }] },
+
+        // Smithing
+        // Verified from the in-game Smithing recipe cards on 2026-08-12.
+        // The screenshots were taken in Emberfall with its 20% Smithing speed
+        // bonus active, so these are the unbonused base cycle times. The normal
+        // city-speed calculation applies Emberfall's 20% reduction at runtime.
+        { skill: 'smithing', item: 'Copper Round Shot', level: 1, xp: 2, cycle: 4, ingredients: [{ name: 'Copper Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Copper Chain Shot', level: 1, xp: 2, cycle: 4, ingredients: [{ name: 'Copper Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Copper Grape Shot', level: 1, xp: 2, cycle: 4, ingredients: [{ name: 'Copper Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Copper 2-Pounder', level: 1, xp: 13, cycle: 30, ingredients: [{ name: 'Copper Bar', quantity: 20 }, { name: 'Pine Beam', quantity: 5 }] },
+
+        { skill: 'smithing', item: 'Iron Round Shot', level: 5, xp: 6, cycle: 5, ingredients: [{ name: 'Iron Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Iron Chain Shot', level: 5, xp: 6, cycle: 5, ingredients: [{ name: 'Iron Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Iron Grape Shot', level: 5, xp: 6, cycle: 5, ingredients: [{ name: 'Iron Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Iron 4-Pounder', level: 5, xp: 23, cycle: 45, ingredients: [{ name: 'Iron Bar', quantity: 22 }, { name: 'Oak Beam', quantity: 6 }] },
+
+        { skill: 'smithing', item: 'Cinder Round Shot', level: 10, xp: 10, cycle: 6, ingredients: [{ name: 'Cinder Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Cinder Chain Shot', level: 10, xp: 10, cycle: 6, ingredients: [{ name: 'Cinder Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Cinder Grape Shot', level: 10, xp: 10, cycle: 6, ingredients: [{ name: 'Cinder Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Cinder 6-Pounder', level: 10, xp: 35, cycle: 60, ingredients: [{ name: 'Cinder Bar', quantity: 24 }, { name: 'Willow Beam', quantity: 7 }] },
+
+        { skill: 'smithing', item: 'Darkiron Round Shot', level: 20, xp: 14, cycle: 8, ingredients: [{ name: 'Darkiron Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Darkiron Chain Shot', level: 20, xp: 14, cycle: 8, ingredients: [{ name: 'Darkiron Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Darkiron Grape Shot', level: 20, xp: 14, cycle: 8, ingredients: [{ name: 'Darkiron Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Darkiron 8-Pounder', level: 20, xp: 60, cycle: 90, ingredients: [{ name: 'Darkiron Bar', quantity: 28 }, { name: 'Maple Beam', quantity: 8 }] },
+
+        { skill: 'smithing', item: 'Mithril Round Shot', level: 30, xp: 20, cycle: 10, ingredients: [{ name: 'Mithril Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Mithril Chain Shot', level: 30, xp: 20, cycle: 10, ingredients: [{ name: 'Mithril Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Mithril Grape Shot', level: 30, xp: 20, cycle: 10, ingredients: [{ name: 'Mithril Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Mithril 9-Pounder', level: 30, xp: 90, cycle: 120, ingredients: [{ name: 'Mithril Bar', quantity: 34 }, { name: 'Teak Beam', quantity: 10 }] },
+
+        { skill: 'smithing', item: 'Adamantite Round Shot', level: 40, xp: 26, cycle: 12, ingredients: [{ name: 'Adamantite Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Adamantite Chain Shot', level: 40, xp: 26, cycle: 12, ingredients: [{ name: 'Adamantite Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Adamantite Grape Shot', level: 40, xp: 26, cycle: 12, ingredients: [{ name: 'Adamantite Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Adamantite 12-Pounder', level: 40, xp: 150, cycle: 180, ingredients: [{ name: 'Adamantite Bar', quantity: 42 }, { name: 'Mahogany Beam', quantity: 13 }] },
+
+        { skill: 'smithing', item: 'Starmetal Round Shot', level: 50, xp: 32, cycle: 15, ingredients: [{ name: 'Starmetal Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Starmetal Chain Shot', level: 50, xp: 32, cycle: 15, ingredients: [{ name: 'Starmetal Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Starmetal Grape Shot', level: 50, xp: 32, cycle: 15, ingredients: [{ name: 'Starmetal Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Starmetal 18-Pounder', level: 50, xp: 275, cycle: 300, ingredients: [{ name: 'Starmetal Bar', quantity: 55 }, { name: 'Yew Beam', quantity: 17 }] },
+
+        { skill: 'smithing', item: 'Stormglass Round Shot', level: 60, xp: 38, cycle: 18, ingredients: [{ name: 'Stormglass Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Stormglass Chain Shot', level: 60, xp: 38, cycle: 18, ingredients: [{ name: 'Stormglass Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Stormglass Grape Shot', level: 60, xp: 38, cycle: 18, ingredients: [{ name: 'Stormglass Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Stormglass 24-Pounder', level: 60, xp: 600, cycle: 600, ingredients: [{ name: 'Stormglass Bar', quantity: 80 }, { name: 'Blackwood Beam', quantity: 24 }] },
+
+        { skill: 'smithing', item: 'Leviathan Round Shot', level: 70, xp: 48, cycle: 25, ingredients: [{ name: 'Leviathan Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Leviathan Chain Shot', level: 70, xp: 48, cycle: 25, ingredients: [{ name: 'Leviathan Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Leviathan Grape Shot', level: 70, xp: 48, cycle: 25, ingredients: [{ name: 'Leviathan Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Leviathan 32-Pounder', level: 70, xp: 975, cycle: 900, ingredients: [{ name: 'Leviathan Bar', quantity: 150 }, { name: 'Ironbark Beam', quantity: 40 }] },
+
+        { skill: 'smithing', item: 'Abyssal Round Shot', level: 80, xp: 60, cycle: 35, ingredients: [{ name: 'Abyssal Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Abyssal Chain Shot', level: 80, xp: 60, cycle: 35, ingredients: [{ name: 'Abyssal Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Abyssal Grape Shot', level: 80, xp: 60, cycle: 35, ingredients: [{ name: 'Abyssal Bar', quantity: 1 }] },
+        { skill: 'smithing', item: 'Abyssal 42-Pounder', level: 80, xp: 2100, cycle: 1800, ingredients: [{ name: 'Abyssal Bar', quantity: 350 }, { name: 'Elderwood Beam', quantity: 60 }] },
 
         // Cooking
         { skill: 'cooking', item: 'Salted Mackerel', level: 1, xp: 7, cycle: 5, ingredients: [{ name: 'Mackerel', quantity: 1 }] },
@@ -1673,12 +1728,9 @@
         }
 
         /*
-         * Smithing XP is learned from Tidefall's live recipe cards rather
-         * than hard-coded. Quartermaster already knows the authoritative
-         * level, base cycle, and bar input for ammunition, so use those
-         * values for planner calculations while keeping the XP read from
-         * the game. This avoids double-applying Emberfall's speed bonus to
-         * a cycle time that was captured from the rendered page.
+         * Smithing now has verified built-in XP data. Keep canonicalization
+         * here for backward compatibility with older saved captures so stale
+         * ingredient-label parser mistakes can never re-enter the planner.
          */
         if (skill === 'smithing') {
             const canonical = canonicalSmithingXpRecipe(item);
@@ -1731,9 +1783,9 @@
         });
 
         /*
-         * Include live recipes captured by Read XP. This is required for
-         * Smithing because its ammunition XP values are intentionally read
-         * from Tidefall rather than guessed or duplicated here.
+         * Merge any older saved page captures for backward compatibility.
+         * Built-in recipes are preloaded into state on startup, so the
+         * verified Smithing table remains authoritative.
          */
         Object.values(state.xpRecipes || {}).forEach(recipe => {
             const normalized = normalizeXpRecipeForPlanner(recipe);
@@ -6814,18 +6866,6 @@
                             Quartermaster uses your detected current level and XP
                             progress to calculate actions, time, and materials.
                         </p>
-                        <div style="display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap;">
-                            <button
-                                id="tqm-read-xp"
-                                class="tqm-action tqm-secondary tqm-compact"
-                                type="button"
-                            >
-                                Read XP
-                            </button>
-                            <span class="tqm-note" style="margin:0;">
-                                Open a Tidefall profession recipe page first, then press Read XP.
-                            </span>
-                        </div>
                     </div>
 
                     <div class="tqm-best-port-badge">
@@ -11001,19 +11041,6 @@
             }
         );
 
-        document.querySelector('#tqm-read-xp')?.addEventListener(
-            'click',
-            () => {
-                const captured = scanXpRecipesFromPage();
-                showToast(
-                    captured > 0
-                        ? `Captured ${captured} visible XP recipes.`
-                        : 'No XP recipes found. Open a profession recipe page first.'
-                );
-                renderActiveTab('xp');
-            }
-        );
-
         const setSimulatedMasteryTrack = (
             skill,
             track,
@@ -11837,7 +11864,6 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
 
         scanMasteryFromPage();
         scanSkillLevelsFromPage();
-        scanXpRecipesFromPage();
         createOverlay();
         scanVisibleExchange();
 
@@ -14968,7 +14994,8 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
     /*
      * Stagger the fallbacks so they do not all wake up on the same frame.
      * XP recipe discovery is intentionally not periodic anymore; it still
-     * runs when Quartermaster opens and when Read XP is pressed.
+     * is retained only as a dormant compatibility helper; verified XP data
+     * is built in and no automatic full-page XP scan is performed.
      */
     window.setTimeout(() => {
         runInventoryFallback();
