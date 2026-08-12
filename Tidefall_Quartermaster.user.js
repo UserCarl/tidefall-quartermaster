@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tidefall Quartermaster
 // @namespace    tidefall-quartermaster
-// @version      1.0.20.5
+// @version      1.0.20.6
 // @description  Standalone Exchange reader and mastery-aware profit advisor for Tidefall
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=playtidefall.com
 // @updateURL    https://raw.githubusercontent.com/UserCarl/tidefall-quartermaster/main/Tidefall_Quartermaster.user.js
@@ -13,8 +13,8 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.0.20.5';
-    const BUILD_ID = '2026-08-12-manual-smithing-xp';
+    const VERSION = '1.0.20.6';
+    const BUILD_ID = '2026-08-12-grouped-smithing-shots';
     const STORAGE_KEY = 'tf-quartermaster-v1';
     const BUTTON_ID = 'tf-quartermaster-button';
     const VENDOR_BUTTON_ID = 'tf-quartermaster-vendor-button';
@@ -1104,6 +1104,60 @@
         return totals;
     }
 
+    function groupedSmithingShotName(itemName) {
+        const normalized = normalizeName(itemName);
+        const match = normalized.match(
+            /^(Copper|Iron|Cinder|Darkiron|Mithril|Adamantite|Starmetal|Stormglass|Leviathan|Abyssal)\s+(Round|Chain|Grape)\s+Shot$/i
+        );
+
+        if (!match) return '';
+
+        const metal = METALS.find(candidate =>
+            candidate.toLowerCase() === match[1].toLowerCase()
+        ) || match[1];
+
+        return `${metal} Shot (Round / Chain / Grape)`;
+    }
+
+    function collapseSmithingShotXpRows(rows) {
+        const groupedRows = new Map();
+        const collapsed = [];
+
+        rows.forEach(row => {
+            if (row.skill !== 'smithing') {
+                collapsed.push(row);
+                return;
+            }
+
+            const groupedName = groupedSmithingShotName(row.item);
+
+            if (!groupedName) {
+                collapsed.push(row);
+                return;
+            }
+
+            const key = groupedName.toLowerCase();
+            const existing = groupedRows.get(key);
+
+            if (existing) {
+                existing.shotVariants.push(row.item);
+                return;
+            }
+
+            const groupedRow = {
+                ...row,
+                item: groupedName,
+                shotVariants: [row.item],
+                source: 'grouped-smithing-shot'
+            };
+
+            groupedRows.set(key, groupedRow);
+            collapsed.push(groupedRow);
+        });
+
+        return collapsed;
+    }
+
     function selectedProgressRecipe() {
         const recipes = calculateXpRows().filter(
             recipe => SUPPORTED_XP_SKILLS.includes(recipe.skill)
@@ -1112,10 +1166,32 @@
             ? state.progressPlanner.skill
             : 'smelting';
         const skillRecipes = recipes.filter(recipe => recipe.skill === skill);
-        const selected = skillRecipes.find(
+        let selected = skillRecipes.find(
             recipe => xpRecipeKey(recipe.skill, recipe.item) ===
                 state.progressPlanner?.itemKey
         );
+
+        /*
+         * v1.0.20.6 groups Round, Chain, and Grape Shot into one XP Planner
+         * action because all three variants use the same bar, level, cycle, and
+         * XP for a given metal. Preserve old saved selections by mapping an
+         * individual shot key to its new grouped row.
+         */
+        if (!selected && skill === 'smithing') {
+            const savedKey = String(state.progressPlanner?.itemKey || '');
+            const prefix = 'smithing:';
+            const savedItem = savedKey.toLowerCase().startsWith(prefix)
+                ? savedKey.slice(prefix.length)
+                : '';
+            const groupedName = groupedSmithingShotName(savedItem);
+
+            if (groupedName) {
+                selected = skillRecipes.find(recipe =>
+                    normalizeName(recipe.item).toLowerCase() ===
+                    groupedName.toLowerCase()
+                ) || null;
+            }
+        }
 
         return selected || skillRecipes[0] || null;
     }
@@ -1810,7 +1886,7 @@
             });
         });
 
-        return [...recipeMap.values()]
+        const rows = [...recipeMap.values()]
             .map(recipe => {
                 const canMake = hasRequiredLevel(
                     recipe.skill,
@@ -1841,7 +1917,9 @@
                 SUPPORTED_XP_SKILLS.includes(recipe.skill) &&
                 recipe.xp > 0 &&
                 recipe.cycle > 0
-            )
+            );
+
+        return collapseSmithingShotXpRows(rows)
             .sort((a, b) => b.xpPerHour - a.xpPerHour);
     }
 
