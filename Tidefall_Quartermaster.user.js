@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tidefall Quartermaster
 // @namespace    tidefall-quartermaster
-// @version      1.0.21.0
+// @version      1.0.21.1
 // @description  Standalone Exchange reader and mastery-aware profit advisor for Tidefall
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=playtidefall.com
 // @updateURL    https://raw.githubusercontent.com/UserCarl/tidefall-quartermaster/main/Tidefall_Quartermaster.user.js
@@ -13,8 +13,8 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.0.21.0';
-    const BUILD_ID = '2026-08-12-skill-economy-official';
+    const VERSION = '1.0.21.1';
+    const BUILD_ID = '2026-08-12-xp-planner-dropdown-fix';
     const STORAGE_KEY = 'tf-quartermaster-v1';
     const BUTTON_ID = 'tf-quartermaster-button';
     const VENDOR_BUTTON_ID = 'tf-quartermaster-vendor-button';
@@ -1886,13 +1886,25 @@
             );
             const builtIn = recipeMap.get(key);
 
+            /*
+             * XP Planner actions must come from the verified built-in catalog.
+             * Page captures may refresh known actions, but must never create
+             * ingredient-label actions such as "1× Cod" or "55× Starmetal Bar".
+             */
+            if (!builtIn) {
+                return;
+            }
+
             recipeMap.set(key, {
-                ...(builtIn || {}),
+                ...builtIn,
                 ...normalized,
+                skill: builtIn.skill,
+                item: builtIn.item,
+                level: builtIn.level,
                 ingredients:
                     normalized.ingredients?.length
                         ? normalized.ingredients
-                        : (builtIn?.ingredients || [])
+                        : (builtIn.ingredients || [])
             });
         });
 
