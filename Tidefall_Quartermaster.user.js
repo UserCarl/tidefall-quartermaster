@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tidefall Quartermaster
 // @namespace    tidefall-quartermaster
-// @version      1.0.20.3
+// @version      1.0.20.4
 // @description  Standalone Exchange reader and mastery-aware profit advisor for Tidefall
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=playtidefall.com
 // @updateURL    https://raw.githubusercontent.com/UserCarl/tidefall-quartermaster/main/Tidefall_Quartermaster.user.js
@@ -13,8 +13,8 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.0.20.3';
-    const BUILD_ID = '2026-08-12-performance-smithing-xp-fix';
+    const VERSION = '1.0.20.4';
+    const BUILD_ID = '2026-08-12-read-xp-button-fix';
     const STORAGE_KEY = 'tf-quartermaster-v1';
     const BUTTON_ID = 'tf-quartermaster-button';
     const VENDOR_BUTTON_ID = 'tf-quartermaster-vendor-button';
@@ -6814,6 +6814,18 @@
                             Quartermaster uses your detected current level and XP
                             progress to calculate actions, time, and materials.
                         </p>
+                        <div style="display:flex;align-items:center;gap:10px;margin-top:10px;flex-wrap:wrap;">
+                            <button
+                                id="tqm-read-xp"
+                                class="tqm-action tqm-secondary tqm-compact"
+                                type="button"
+                            >
+                                Read XP
+                            </button>
+                            <span class="tqm-note" style="margin:0;">
+                                Open a Tidefall profession recipe page first, then press Read XP.
+                            </span>
+                        </div>
                     </div>
 
                     <div class="tqm-best-port-badge">
