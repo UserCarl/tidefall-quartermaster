@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tidefall Quartermaster
 // @namespace    tidefall-quartermaster
-// @version      1.0.20.1
+// @version      1.0.20.2
 // @description  Standalone Exchange reader and mastery-aware profit advisor for Tidefall
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=playtidefall.com
 // @updateURL    https://raw.githubusercontent.com/UserCarl/tidefall-quartermaster/main/Tidefall_Quartermaster.user.js
@@ -13,8 +13,8 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.0.20.1';
-    const BUILD_ID = '2026-08-12-performance-fix';
+    const VERSION = '1.0.20.2';
+    const BUILD_ID = '2026-08-12-performance-smithing-xp-fix';
     const STORAGE_KEY = 'tf-quartermaster-v1';
     const BUTTON_ID = 'tf-quartermaster-button';
     const VENDOR_BUTTON_ID = 'tf-quartermaster-vendor-button';
@@ -783,6 +783,7 @@
         'fishing',
         'carpentry',
         'smelting',
+        'smithing',
         'cooking',
         'crafting'
     ];
@@ -1541,8 +1542,118 @@
         return captured;
     }
 
+    function normalizeXpRecipeForPlanner(recipe) {
+        if (!recipe || typeof recipe !== 'object') {
+            return null;
+        }
+
+        const skill = String(recipe.skill || '').trim().toLowerCase();
+        const item = normalizeName(recipe.item);
+        const xp = Number(recipe.xp || 0);
+
+        if (!skill || !item || !(xp > 0)) {
+            return null;
+        }
+
+        /*
+         * Smithing XP is learned from Tidefall's live recipe cards rather
+         * than hard-coded. Quartermaster already knows the authoritative
+         * level, base cycle, and bar input for ammunition, so use those
+         * values for planner calculations while keeping the XP read from
+         * the game. This avoids double-applying Emberfall's speed bonus to
+         * a cycle time that was captured from the rendered page.
+         */
+        if (skill === 'smithing') {
+            const metal = METALS.find(candidate =>
+                SHOT_TYPES.some(type =>
+                    item.toLowerCase() ===
+                    `${candidate} ${type}`.toLowerCase()
+                )
+            );
+
+            if (metal) {
+                return {
+                    ...recipe,
+                    skill,
+                    item,
+                    xp,
+                    level: Number(
+                        SHOT_REQUIRED_LEVELS[metal] ||
+                        recipe.level ||
+                        1
+                    ),
+                    cycle: Number(
+                        SHOT_CRAFT_TIMES[metal] ||
+                        recipe.cycle ||
+                        0
+                    ),
+                    ingredients: [
+                        {
+                            name: `${metal} Bar`,
+                            quantity: 1
+                        }
+                    ],
+                    source: recipe.source || 'page'
+                };
+            }
+        }
+
+        return {
+            ...recipe,
+            skill,
+            item,
+            xp,
+            cycle: Number(recipe.cycle || 0),
+            level: Number(recipe.level || 0),
+            ingredients: Array.isArray(recipe.ingredients)
+                ? recipe.ingredients
+                : [],
+            source: recipe.source || 'captured'
+        };
+    }
+
     function calculateXpRows() {
-        return BUILT_IN_XP_RECIPES
+        const recipeMap = new Map();
+
+        BUILT_IN_XP_RECIPES.forEach(recipe => {
+            recipeMap.set(
+                xpRecipeKey(recipe.skill, recipe.item),
+                {
+                    ...recipe,
+                    source: 'built-in'
+                }
+            );
+        });
+
+        /*
+         * Include live recipes captured by Read XP. This is required for
+         * Smithing because its ammunition XP values are intentionally read
+         * from Tidefall rather than guessed or duplicated here.
+         */
+        Object.values(state.xpRecipes || {}).forEach(recipe => {
+            const normalized = normalizeXpRecipeForPlanner(recipe);
+
+            if (!normalized) {
+                return;
+            }
+
+            const key = xpRecipeKey(
+                normalized.skill,
+                normalized.item
+            );
+            const builtIn = recipeMap.get(key);
+
+            recipeMap.set(key, {
+                ...(builtIn || {}),
+                ...normalized,
+                ingredients:
+                    normalized.ingredients?.length
+                        ? normalized.ingredients
+                        : (builtIn?.ingredients || [])
+            });
+        });
+
+        return [...recipeMap.values()]
             .map(recipe => {
                 const canMake = hasRequiredLevel(
                     recipe.skill,
@@ -1565,12 +1676,15 @@
                     ...recipe,
                     baseXp,
                     xp,
-                    source: 'built-in',
                     canMake,
                     xpPerHour
                 };
             })
-            .filter(recipe => recipe.xp > 0 && recipe.cycle > 0)
+            .filter(recipe =>
+                SUPPORTED_XP_SKILLS.includes(recipe.skill) &&
+                recipe.xp > 0 &&
+                recipe.cycle > 0
+            )
             .sort((a, b) => b.xpPerHour - a.xpPerHour);
     }
 
