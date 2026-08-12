@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tidefall Quartermaster
 // @namespace    tidefall-quartermaster
-// @version      1.0.20.2
+// @version      1.0.20.3
 // @description  Standalone Exchange reader and mastery-aware profit advisor for Tidefall
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=playtidefall.com
 // @updateURL    https://raw.githubusercontent.com/UserCarl/tidefall-quartermaster/main/Tidefall_Quartermaster.user.js
@@ -13,7 +13,7 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.0.20.2';
+    const VERSION = '1.0.20.3';
     const BUILD_ID = '2026-08-12-performance-smithing-xp-fix';
     const STORAGE_KEY = 'tf-quartermaster-v1';
     const BUTTON_ID = 'tf-quartermaster-button';
@@ -1447,6 +1447,98 @@
         return secondMatch ? Number(secondMatch[1]) : 0;
     }
 
+    function smithingXpRecipeCatalog() {
+        const recipes = [];
+
+        METALS.forEach(metal => {
+            SHOT_TYPES.forEach(type => {
+                recipes.push({
+                    item: `${metal} ${type}`,
+                    level: Number(SHOT_REQUIRED_LEVELS[metal] || 1),
+                    cycle: Number(SHOT_CRAFT_TIMES[metal] || 0),
+                    ingredients: [
+                        {
+                            name: `${metal} Bar`,
+                            quantity: 1
+                        }
+                    ]
+                });
+            });
+        });
+
+        CANNON_RECIPES.forEach(recipe => {
+            recipes.push({
+                item: recipe.item,
+                level: Number(recipe.level || 1),
+                cycle: Number(recipe.cycle || 0),
+                ingredients: [
+                    {
+                        name: `${recipe.metal} Bar`,
+                        quantity: Number(recipe.bars || 0)
+                    },
+                    {
+                        name: `${recipe.wood} Beam`,
+                        quantity: Number(recipe.beams || 0)
+                    }
+                ]
+            });
+        });
+
+        return recipes;
+    }
+
+    function canonicalSmithingXpRecipe(itemName) {
+        const normalized = normalizeName(itemName).toLowerCase();
+
+        if (!normalized) {
+            return null;
+        }
+
+        return smithingXpRecipeCatalog().find(recipe =>
+            recipe.item.toLowerCase() === normalized
+        ) || null;
+    }
+
+    function smithingXpRecipeFromCardText(cardText) {
+        const normalized = normalizeName(cardText).toLowerCase();
+
+        if (!normalized) {
+            return null;
+        }
+
+        /*
+         * Smithing cards contain ingredient labels such as
+         * "55x Starmetal Bar" and "17x Yew Beam". The generic title/name
+         * selector can accidentally select one of those labels. Match the
+         * card against Quartermaster's canonical Smithing recipe names first
+         * so the XP is attached to "Starmetal 18-Pounder", not its inputs.
+         */
+        return smithingXpRecipeCatalog()
+            .sort((a, b) => b.item.length - a.item.length)
+            .find(recipe =>
+                normalized.includes(recipe.item.toLowerCase())
+            ) || null;
+    }
+
+    function purgeMalformedSmithingXpRecipes() {
+        let changed = false;
+
+        Object.entries(state.xpRecipes || {}).forEach(([key, recipe]) => {
+            if (
+                String(recipe?.skill || '').toLowerCase() !== 'smithing'
+            ) {
+                return;
+            }
+
+            if (!canonicalSmithingXpRecipe(recipe.item)) {
+                delete state.xpRecipes[key];
+                changed = true;
+            }
+        });
+
+        return changed;
+    }
+
     function scanXpRecipesFromPage() {
         const xpNodes = [...document.querySelectorAll('span, div')]
             .filter(node => {
@@ -1459,6 +1551,7 @@
 
         let captured = 0;
         const seenCards = new Set();
+        let stateChanged = purgeMalformedSmithingXpRecipes();
 
         xpNodes.forEach(xpNode => {
             let card = xpNode.parentElement;
@@ -1490,35 +1583,57 @@
             if (!skillMatch) return;
 
             const skill = skillMatch[1].toLowerCase();
-            const level = Number(skillMatch[2] || 0);
+            const detectedLevel = Number(skillMatch[2] || 0);
             const xp = numberFromText(xpNode.textContent);
-            const cycle = parseDisplayedCycle(cardText);
+            const detectedCycle = parseDisplayedCycle(cardText);
+            let item = '';
+            let level = detectedLevel;
+            let cycle = detectedCycle;
+            let ingredients;
 
-            const titleElement = card.querySelector(
-                [
-                    'h1',
-                    'h2',
-                    'h3',
-                    'h4',
-                    '[class*="title"]',
-                    '[class*="name"]'
-                ].join(',')
-            );
+            if (skill === 'smithing') {
+                const canonical = smithingXpRecipeFromCardText(cardText);
 
-            let item = normalizeName(titleElement?.textContent);
+                if (!canonical) {
+                    /*
+                     * Do not save an ingredient label as a Smithing recipe.
+                     * Unknown Smithing cards can be added to the canonical
+                     * catalog later without poisoning the XP Planner now.
+                     */
+                    return;
+                }
 
-            if (!item) {
-                const lines = String(card.innerText || '')
-                    .split('\n')
-                    .map(normalizeName)
-                    .filter(Boolean);
+                item = canonical.item;
+                level = canonical.level;
+                cycle = canonical.cycle;
+                ingredients = canonical.ingredients;
+            } else {
+                const titleElement = card.querySelector(
+                    [
+                        'h1',
+                        'h2',
+                        'h3',
+                        'h4',
+                        '[class*="title"]',
+                        '[class*="name"]'
+                    ].join(',')
+                );
 
-                item = lines.find(line =>
-                    !/\bXP\b/i.test(line) &&
-                    !/\bLv\.?\s*\d+/i.test(line) &&
-                    !/^\d+(?:\.\d+)?s$/i.test(line) &&
-                    !/^(Cook|Craft|Smelt|Saw|Forge|Make)$/i.test(line)
-                ) || '';
+                item = normalizeName(titleElement?.textContent);
+
+                if (!item) {
+                    const lines = String(card.innerText || '')
+                        .split('\n')
+                        .map(normalizeName)
+                        .filter(Boolean);
+
+                    item = lines.find(line =>
+                        !/\bXP\b/i.test(line) &&
+                        !/\bLv\.?\s*\d+/i.test(line) &&
+                        !/^\d+(?:\.\d+)?s$/i.test(line) &&
+                        !/^(Cook|Craft|Smelt|Saw|Forge|Make)$/i.test(line)
+                    ) || '';
+                }
             }
 
             if (
@@ -1528,14 +1643,16 @@
                     xp,
                     cycle,
                     level,
+                    ingredients,
                     source: 'page'
                 })
             ) {
                 captured += 1;
+                stateChanged = true;
             }
         });
 
-        if (captured > 0) {
+        if (stateChanged) {
             saveState();
         }
 
@@ -1564,38 +1681,26 @@
          * a cycle time that was captured from the rendered page.
          */
         if (skill === 'smithing') {
-            const metal = METALS.find(candidate =>
-                SHOT_TYPES.some(type =>
-                    item.toLowerCase() ===
-                    `${candidate} ${type}`.toLowerCase()
-                )
-            );
+            const canonical = canonicalSmithingXpRecipe(item);
 
-            if (metal) {
-                return {
-                    ...recipe,
-                    skill,
-                    item,
-                    xp,
-                    level: Number(
-                        SHOT_REQUIRED_LEVELS[metal] ||
-                        recipe.level ||
-                        1
-                    ),
-                    cycle: Number(
-                        SHOT_CRAFT_TIMES[metal] ||
-                        recipe.cycle ||
-                        0
-                    ),
-                    ingredients: [
-                        {
-                            name: `${metal} Bar`,
-                            quantity: 1
-                        }
-                    ],
-                    source: recipe.source || 'page'
-                };
+            /*
+             * Ignore stale parser mistakes such as "55x Starmetal Bar".
+             * Only canonical Smithing outputs belong in the XP Planner.
+             */
+            if (!canonical) {
+                return null;
             }
+
+            return {
+                ...recipe,
+                skill,
+                item: canonical.item,
+                xp,
+                level: canonical.level,
+                cycle: canonical.cycle,
+                ingredients: canonical.ingredients,
+                source: recipe.source || 'page'
+            };
         }
 
         return {
