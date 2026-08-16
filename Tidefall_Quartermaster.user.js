@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tidefall Quartermaster
 // @namespace    tidefall-quartermaster
-// @version      1.0.21.1
+// @version      1.0.23
 // @description  Standalone Exchange reader and mastery-aware profit advisor for Tidefall
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=playtidefall.com
 // @updateURL    https://raw.githubusercontent.com/UserCarl/tidefall-quartermaster/main/Tidefall_Quartermaster.user.js
@@ -13,8 +13,8 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.0.21.1';
-    const BUILD_ID = '2026-08-12-xp-planner-dropdown-fix';
+    const VERSION = '1.0.29';
+    const BUILD_ID = '2026-08-15-net-worth-clear-history-button';
     const STORAGE_KEY = 'tf-quartermaster-v1';
     const BUTTON_ID = 'tf-quartermaster-button';
     const VENDOR_BUTTON_ID = 'tf-quartermaster-vendor-button';
@@ -24,9 +24,21 @@
     const MARKET_PARSER_VERSION = 2;
     const EXCLUDE_DEFAULT_MIGRATION_KEY =
         'tf-quartermaster-exclude-default-v1';
+    const CITY_INVENTORY_SEED_MIGRATION_KEY =
+        'tf-quartermaster-city-inventory-seed-v1';
+    const CITY_INVENTORY_RESET_MIGRATION_KEY =
+        'tf-quartermaster-city-inventory-reset-v1';
     const JOURNAL_ID = 'tf-quartermaster-journal';
     const JOURNAL_STORAGE_KEY = 'tf-quartermaster-journal-v1';
     const JOURNAL_MAX_LENGTH = 500;
+    const NET_WORTH_SNAPSHOT_INTERVAL_MS = 5 * 60 * 1000;
+    const NET_WORTH_HISTORY_MAX_POINTS = 4032;
+    const NET_WORTH_RANGE_OPTIONS = [
+        { id: '24h', label: '24H', ms: 24 * 60 * 60 * 1000 },
+        { id: '7d', label: '7D', ms: 7 * 24 * 60 * 60 * 1000 },
+        { id: '30d', label: '30D', ms: 30 * 24 * 60 * 60 * 1000 },
+        { id: 'all', label: 'All', ms: Infinity }
+    ];
 
     function formatGold(value, { allowZero = false } = {}) {
         const amount = Number(value);
@@ -146,6 +158,7 @@
             showShipProgress: true,
             autoRefreshInventory: true,
             showBuyCraftRecommendations: false,
+            netWorthHistoryRange: '7d',
 
             // Economy / inspector feature controls
             itemInspectorEnabled: true,
@@ -158,7 +171,9 @@
             showCalculationSourceIndicators: false
         },
         masteryUpdatedAt: 0,
-        updatedAt: 0
+        updatedAt: 0,
+        netWorthHistory: [],
+        cityInventories: {}
     };
 
     const WOODS = [
@@ -534,18 +549,31 @@
         'Yew Plank': 40
     };
 
+    /*
+     * BUILT_IN_VENDOR_PRICES is static, so this lookup map is built once
+     * instead of re-scanning the table on every builtInVendorPrice() call.
+     */
+    const BUILT_IN_VENDOR_PRICES_BY_NORMALIZED_NAME = new Map(
+        Object.entries(BUILT_IN_VENDOR_PRICES).map(([name, price]) => [
+            normalizeName(name).toLowerCase(),
+            price
+        ])
+    );
+
     function builtInVendorPrice(itemName) {
         const normalized = normalizeName(itemName);
         if (!normalized) return 0;
 
-        const direct = Object.entries(BUILT_IN_VENDOR_PRICES)
-            .find(([name]) =>
-                normalizeName(name).toLowerCase() ===
+        if (
+            BUILT_IN_VENDOR_PRICES_BY_NORMALIZED_NAME.has(
                 normalized.toLowerCase()
+            )
+        ) {
+            return Number(
+                BUILT_IN_VENDOR_PRICES_BY_NORMALIZED_NAME.get(
+                    normalized.toLowerCase()
+                ) || 0
             );
-
-        if (direct) {
-            return Number(direct[1] || 0);
         }
 
         const wood = WOODS.find(candidate =>
@@ -963,6 +991,19 @@
         return `${String(skill || '').toLowerCase()}:${normalizeName(item).toLowerCase()}`;
     }
 
+    /*
+     * Lazily-built index for xpRecipeByItem(), invalidated whenever
+     * state.xpRecipes is written to (saveXpRecipe, purgeMalformedSmithing
+     * XpRecipes) or reloaded wholesale. Avoids re-scanning every known
+     * recipe on each call, which matters because xpRecipeByItem() is
+     * called recursively per ingredient inside expandBaseMaterials().
+     */
+    let xpRecipeByItemCache = null;
+
+    function invalidateXpRecipeByItemCache() {
+        xpRecipeByItemCache = null;
+    }
+
     function saveXpRecipe(recipe) {
         const skill = String(recipe?.skill || '').trim().toLowerCase();
         const item = normalizeName(recipe?.item);
@@ -990,6 +1031,8 @@
             source: recipe.source || existing.source || 'captured',
             capturedAt: Date.now()
         };
+
+        invalidateXpRecipeByItemCache();
 
         return true;
     }
@@ -1060,10 +1103,21 @@
 
     function xpRecipeByItem(itemName) {
         const normalized = normalizeName(itemName).toLowerCase();
+        if (!normalized) return null;
 
-        return Object.values(state.xpRecipes).find(recipe =>
-            normalizeName(recipe.item).toLowerCase() === normalized
-        ) || null;
+        if (!xpRecipeByItemCache) {
+            xpRecipeByItemCache = new Map();
+
+            Object.values(state.xpRecipes).forEach(recipe => {
+                const key = normalizeName(recipe.item).toLowerCase();
+
+                if (!xpRecipeByItemCache.has(key)) {
+                    xpRecipeByItemCache.set(key, recipe);
+                }
+            });
+        }
+
+        return xpRecipeByItemCache.get(normalized) || null;
     }
 
     function recipeOutputPerAction(recipe) {
@@ -1248,7 +1302,8 @@
                 )
             )
         );
-        const skillRecipes = calculateXpRows()
+        const allXpRows = calculateXpRows();
+        const skillRecipes = allXpRows
             .filter(recipe => recipe.skill === skill)
             .sort((a, b) =>
                 Number(a.level || 0) - Number(b.level || 0) ||
@@ -1428,7 +1483,7 @@
         const gatheringPlan = directIngredients
             .map(ingredient => {
                 const gatheringRecipe = skillRecipes.length
-                    ? calculateXpRows().find(recipe =>
+                    ? allXpRows.find(recipe =>
                         gatheringSkills.has(recipe.skill) &&
                         normalizeName(recipe.item).toLowerCase() ===
                         normalizeName(ingredient.name).toLowerCase()
@@ -1676,6 +1731,10 @@
                 changed = true;
             }
         });
+
+        if (changed) {
+            invalidateXpRecipeByItemCache();
+        }
 
         return changed;
     }
@@ -2119,7 +2178,15 @@
                 vendorDebug: {
                     ...DEFAULT_STATE.vendorDebug,
                     ...(saved.vendorDebug || {})
-                }
+                },
+                netWorthHistory: Array.isArray(saved.netWorthHistory)
+                    ? saved.netWorthHistory
+                    : [],
+                cityInventories:
+                    saved.cityInventories &&
+                    typeof saved.cityInventories === 'object'
+                        ? saved.cityInventories
+                        : {}
             };
         } catch {
             return structuredClone(DEFAULT_STATE);
@@ -2172,6 +2239,45 @@
     if (!localStorage.getItem(EXCLUDE_DEFAULT_MIGRATION_KEY)) {
         state.excludeLockedCrafts = true;
         localStorage.setItem(EXCLUDE_DEFAULT_MIGRATION_KEY, '1');
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    }
+
+    /*
+     * Warehouses are per-city, but before city-tracking existed the
+     * single-city inventoryCache snapshot was the only record we had.
+     * Seed it into cityInventories once so Net Worth doesn't collapse to
+     * ship-cargo-only for players updating from an older version.
+     */
+    if (!localStorage.getItem(CITY_INVENTORY_SEED_MIGRATION_KEY)) {
+        if (
+            state.currentCity &&
+            state.currentCity !== 'None' &&
+            !state.cityInventories[state.currentCity] &&
+            Object.keys(state.inventoryCache?.warehouseItems || {}).length
+        ) {
+            state.cityInventories = {
+                ...state.cityInventories,
+                [state.currentCity]: {
+                    items: state.inventoryCache.warehouseItems,
+                    updatedAt: Number(state.inventoryCache.updatedAt || Date.now())
+                }
+            };
+        }
+
+        localStorage.setItem(CITY_INVENTORY_SEED_MIGRATION_KEY, '1');
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    }
+
+    /*
+     * Versions before the warehouse-city detector was scoped to
+     * #inv-wh-grid could mislabel a scan under the wrong city (e.g. a
+     * remotely-viewed warehouse filed under the docked city). That data
+     * can't be trusted, so wipe it once and let it rebuild from clean
+     * scans.
+     */
+    if (!localStorage.getItem(CITY_INVENTORY_RESET_MIGRATION_KEY)) {
+        state.cityInventories = {};
+        localStorage.setItem(CITY_INVENTORY_RESET_MIGRATION_KEY, '1');
         localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     }
 
@@ -2256,7 +2362,7 @@
         if (/\bDocked\b/i.test(shipContextText)) {
             const matchedContextCity = knownCities.find(city =>
                 new RegExp(
-                    `^${city.replace(/\s+/g, '\\s+')}\s*·\s*Docked$`,
+                    `^${city.replace(/\s+/g, '\\s+')}\\s*·\\s*Docked$`,
                     'i'
                 ).test(shipContextText)
             );
@@ -2369,6 +2475,77 @@
                 }
             }
         }
+
+        return null;
+    }
+
+    /*
+     * The Warehouse tab has its own city switcher, independent of where the
+     * ship is docked (you can browse another city's warehouse remotely).
+     * detectCurrentCityFromPage() reflects the docked city and must not be
+     * used to label a warehouse scan, or a remotely-viewed city's items get
+     * filed under wherever the ship physically is.
+     */
+    function detectWarehouseCityFromPage() {
+        const knownCities = Object.keys(CITY_BONUSES).filter(
+            city => city !== 'None'
+        );
+
+        /*
+         * The game has more than one city-dropdown UI (e.g. one for the
+         * Warehouse tab, likely others for Market/Exchange), so a
+         * page-wide `.inv-city-dropdown` query can silently latch onto
+         * the wrong one and mislabel every scan with whatever city that
+         * other dropdown happens to show. Scope everything to the
+         * container that actually wraps #inv-wh-grid.
+         */
+        const warehouseGrid = document.getElementById('inv-wh-grid');
+        const container =
+            warehouseGrid?.closest('.inv-grid-clip') ||
+            warehouseGrid?.parentElement ||
+            null;
+
+        if (!container) return null;
+
+        const buttonLabel = normalizeName(
+            container.querySelector('.inv-city-dropdown .inv-city-btn span')
+                ?.textContent || ''
+        );
+        const matchedButton = knownCities.find(
+            city => city === buttonLabel
+        );
+        if (matchedButton) return matchedButton;
+
+        /*
+         * Fallback while the dropdown listbox itself is open, in case the
+         * button label hasn't updated yet.
+         */
+        const activeOption =
+            container.querySelector(
+                '.inv-city-menu .inv-city-option--active'
+            ) ||
+            container.querySelector(
+                '.inv-city-menu .inv-city-option[aria-selected="true"]'
+            );
+
+        const optionLabel = normalizeName(activeOption?.textContent || '');
+        const matchedOption = knownCities.find(
+            city => city === optionLabel
+        );
+        if (matchedOption) return matchedOption;
+
+        /*
+         * Last resort: the "Viewing storage from X. Dock there to
+         * transfer items." notice shown when browsing a city remotely.
+         */
+        const noticeText = normalizeName(
+            container.querySelector('.inv-undocked-notice')?.textContent ||
+                ''
+        );
+        const matchedNotice = knownCities.find(city =>
+            noticeText.includes(`Viewing storage from ${city}`)
+        );
+        if (matchedNotice) return matchedNotice;
 
         return null;
     }
@@ -6695,7 +6872,7 @@
         const previousRounded = Boolean(
             state.inventoryCache?.hasRoundedValues
         );
-        const changed =
+        let changed =
             !inventoryMapsEqual(previous, combined) ||
             previousRounded !== hasRoundedValues;
 
@@ -6712,6 +6889,48 @@
                 )
         };
 
+        /*
+         * Warehouses are per-city, and the Warehouse tab lets you browse a
+         * city's warehouse remotely (without the ship being docked there),
+         * so the docked-ship city (state.currentCity) is NOT a safe label
+         * for which warehouse was just scanned. Read the warehouse tab's
+         * own city switcher instead, falling back to the docked city only
+         * when that switcher isn't on screen.
+         */
+        /*
+         * No fallback to the docked city here on purpose: guessing was
+         * what caused scans of one city's warehouse to get filed under
+         * whichever city the ship happened to be docked at. Skip tagging
+         * rather than mislabel when the warehouse panel's own city can't
+         * be positively identified.
+         */
+        const warehouseCity = detectWarehouseCityFromPage();
+
+        if (warehouseScan && warehouseCity) {
+            const previousCity =
+                state.cityInventories?.[warehouseCity]?.items || {};
+            const cityChanged = !inventoryMapsEqual(
+                previousCity,
+                warehouseItems
+            );
+
+            state.cityInventories = {
+                ...state.cityInventories,
+                [warehouseCity]: {
+                    items: warehouseItems,
+                    hasRoundedValues: Boolean(warehouseScan.hasRoundedValues),
+                    updatedAt: cityChanged
+                        ? Date.now()
+                        : Number(
+                            state.cityInventories?.[warehouseCity]
+                                ?.updatedAt || Date.now()
+                        )
+                }
+            };
+
+            changed = changed || cityChanged;
+        }
+
         applyCachedInventoryToShipBuilder(forceApplyToShipBuilder);
 
         if (changed || forceApplyToShipBuilder) {
@@ -6719,6 +6938,174 @@
         }
 
         return changed;
+    }
+
+    function combinedNetWorthItems() {
+        const combined = {};
+
+        const addAll = source => {
+            Object.entries(source || {}).forEach(([name, quantity]) => {
+                combined[name] =
+                    (combined[name] || 0) + Number(quantity || 0);
+            });
+        };
+
+        Object.values(state.cityInventories || {}).forEach(city => {
+            addAll(city?.items);
+        });
+
+        addAll(state.inventoryCache?.cargoItems);
+
+        return combined;
+    }
+
+    function computeInventoryValue() {
+        const items = combinedNetWorthItems();
+        let total = 0;
+        let pricedCount = 0;
+        let unpricedCount = 0;
+
+        Object.entries(items).forEach(([name, quantity]) => {
+            const count = Number(quantity) || 0;
+            if (!(count > 0)) return;
+
+            const record = sharedPriceRecord(name);
+            const sale = record ? bestSaleValue(record, count) : null;
+
+            if (sale && Number.isFinite(sale.value) && sale.value > 0) {
+                total += sale.value;
+                pricedCount += 1;
+            } else {
+                unpricedCount += 1;
+            }
+        });
+
+        return { total, pricedCount, unpricedCount };
+    }
+
+    function readPlayerGold() {
+        const el = document.getElementById('hdr-gold-val');
+        if (!el) return null;
+
+        const value = numberFromText(el.textContent);
+        return Number.isFinite(value) ? value : null;
+    }
+
+    function computeNetWorth() {
+        const inventory = computeInventoryValue();
+        const gold = readPlayerGold();
+        const goldKnown = Number.isFinite(gold);
+
+        return {
+            total: inventory.total + (goldKnown ? gold : 0),
+            invValue: inventory.total,
+            gold: goldKnown ? gold : 0,
+            goldKnown,
+            pricedCount: inventory.pricedCount,
+            unpricedCount: inventory.unpricedCount
+        };
+    }
+
+    /*
+     * Snapshots are throttled to one per NET_WORTH_SNAPSHOT_INTERVAL_MS and
+     * skipped entirely until gold is readable or at least one item has a
+     * usable price, so a fresh install doesn't fill the history with zeroes.
+     */
+    function recordNetWorthSnapshot(force = false) {
+        const { total, pricedCount, goldKnown } = computeNetWorth();
+        if (!goldKnown && pricedCount === 0 && !force) return false;
+
+        const history = Array.isArray(state.netWorthHistory)
+            ? state.netWorthHistory
+            : [];
+        const last = history[history.length - 1];
+
+        if (
+            !force &&
+            last &&
+            Date.now() - last.t < NET_WORTH_SNAPSHOT_INTERVAL_MS
+        ) {
+            return false;
+        }
+
+        const next = [...history, { t: Date.now(), v: Math.round(total) }];
+
+        state.netWorthHistory =
+            next.length > NET_WORTH_HISTORY_MAX_POINTS
+                ? next.slice(next.length - NET_WORTH_HISTORY_MAX_POINTS)
+                : next;
+
+        saveState();
+        return true;
+    }
+
+    function netWorthHistoryPointsForRange(rangeId) {
+        const history = Array.isArray(state.netWorthHistory)
+            ? state.netWorthHistory
+            : [];
+        const range =
+            NET_WORTH_RANGE_OPTIONS.find(option => option.id === rangeId) ||
+            NET_WORTH_RANGE_OPTIONS[1];
+        const cutoff = Number.isFinite(range.ms) ? Date.now() - range.ms : 0;
+
+        return history.filter(point => point.t >= cutoff);
+    }
+
+    function closestNetWorthPoint(history, targetTime) {
+        if (!history.length) return null;
+
+        return history.reduce((closest, point) => {
+            if (!closest) return point;
+
+            return Math.abs(point.t - targetTime) <
+                Math.abs(closest.t - targetTime)
+                ? point
+                : closest;
+        }, null);
+    }
+
+    function downsampleNetWorthPoints(points, maxPoints = 220) {
+        if (points.length <= maxPoints) return points;
+
+        const stride = points.length / maxPoints;
+        const sampled = [];
+
+        for (let index = 0; index < maxPoints; index += 1) {
+            sampled.push(points[Math.floor(index * stride)]);
+        }
+
+        const last = points[points.length - 1];
+        if (sampled[sampled.length - 1] !== last) sampled.push(last);
+
+        return sampled;
+    }
+
+    function buildNetWorthSparkline(points, width = 760, height = 200) {
+        if (points.length < 2) return null;
+
+        const values = points.map(point => point.v);
+        const minValue = Math.min(...values);
+        const maxValue = Math.max(...values);
+        const span = maxValue - minValue || 1;
+        const stepX = width / (points.length - 1);
+
+        const coords = points.map((point, index) => [
+            index * stepX,
+            height - ((point.v - minValue) / span) * height
+        ]);
+
+        const linePath = coords
+            .map(
+                ([x, y], index) =>
+                    `${index === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`
+            )
+            .join(' ');
+
+        const areaPath =
+            `${linePath} L${width.toFixed(1)},${height.toFixed(1)} ` +
+            `L0,${height.toFixed(1)} Z`;
+
+        return { linePath, areaPath, minValue, maxValue, width, height };
     }
 
     function calculateShipBuild() {
@@ -8411,6 +8798,177 @@
             b.roi - a.roi ||
             b.profit - a.profit
         );
+    }
+
+    function renderNetWorthHistory() {
+        const rangeId = NET_WORTH_RANGE_OPTIONS.some(
+            option => option.id === state.preferences?.netWorthHistoryRange
+        )
+            ? state.preferences.netWorthHistoryRange
+            : '7d';
+
+        const {
+            total: liveValue,
+            invValue,
+            gold,
+            goldKnown,
+            pricedCount,
+            unpricedCount
+        } = computeNetWorth();
+        const fullHistory = Array.isArray(state.netWorthHistory)
+            ? state.netWorthHistory
+            : [];
+        const rangePoints = netWorthHistoryPointsForRange(rangeId);
+        const chartPoints = downsampleNetWorthPoints(rangePoints);
+        const sparkline = buildNetWorthSparkline(chartPoints);
+
+        const dayAgo = closestNetWorthPoint(
+            fullHistory,
+            Date.now() - 24 * 60 * 60 * 1000
+        );
+        const weekAgo = closestNetWorthPoint(
+            fullHistory,
+            Date.now() - 7 * 24 * 60 * 60 * 1000
+        );
+
+        const changeSince = reference => {
+            if (!reference || !(Number(reference.v) > 0)) return null;
+
+            const delta = liveValue - reference.v;
+            return { delta, percent: (delta / reference.v) * 100 };
+        };
+
+        const change24h = changeSince(dayAgo);
+        const change7d = changeSince(weekAgo);
+
+        const changeState = change => {
+            if (!change || change.delta === 0) return 'tqm-state-muted';
+            return change.delta > 0
+                ? 'tqm-state-positive'
+                : 'tqm-state-negative';
+        };
+
+        const changeSubtext = change =>
+            change
+                ? `${change.percent >= 0 ? '+' : ''}${change.percent.toFixed(1)}%`
+                : 'Not enough history yet';
+
+        const knownCities = Object.keys(CITY_BONUSES).filter(
+            city => city !== 'None'
+        );
+        const cityRows = knownCities
+            .map(city => {
+                const record = state.cityInventories?.[city];
+                const known = Boolean(record?.updatedAt);
+                const itemCount = Object.keys(record?.items || {}).length;
+
+                return `
+                    <div class="${known ? 'tqm-status-ok' : 'tqm-status-needed'}">
+                        <span>${escapeHtml(city)}</span>
+                        <strong>${known ? `${itemCount.toLocaleString()} items` : 'Not visited'}</strong>
+                        <small>${formatSettingsTimestamp(record?.updatedAt)}</small>
+                    </div>
+                `;
+            })
+            .join('');
+
+        return `
+            <section class="tqm-card">
+                <h2>Net Worth</h2>
+                <p class="tqm-note">
+                    Gold on hand plus the estimated sale value of everything
+                    sitting in every city's Warehouse and in your Ship Hold,
+                    priced the same way as the rest of Quartermaster
+                    (Exchange orders first, vendor price as a floor).
+                    Equipped gear isn't counted yet, and a city only counts
+                    once you've opened its warehouse at least
+                    once.${goldKnown ? '' : ' Gold couldn’t be read this session, so the total below is inventory-only — open the game so the header gold display is on screen.'}
+                </p>
+
+                <div class="tqm-dashboard-metrics">
+                    <article class="tqm-metric-card tqm-state-positive">
+                        <span>Net Worth</span>
+                        <strong>${formatGold(liveValue, { allowZero: true })}</strong>
+                        <small>
+                            ${formatGold(gold, { allowZero: true })} gold ·
+                            ${formatGold(invValue, { allowZero: true })} inventory
+                        </small>
+                    </article>
+
+                    <article class="tqm-metric-card ${changeState(change24h)}">
+                        <span>Last 24 Hours</span>
+                        <strong>${change24h ? signedMoney(change24h.delta) : '—'}</strong>
+                        <small>${changeSubtext(change24h)}</small>
+                    </article>
+
+                    <article class="tqm-metric-card ${changeState(change7d)}">
+                        <span>Last 7 Days</span>
+                        <strong>${change7d ? signedMoney(change7d.delta) : '—'}</strong>
+                        <small>${changeSubtext(change7d)}</small>
+                    </article>
+
+                    <article class="tqm-metric-card tqm-state-muted">
+                        <span>History</span>
+                        <strong>${fullHistory.length.toLocaleString()} points</strong>
+                        <small>
+                            ${pricedCount.toLocaleString()} priced${
+                                unpricedCount
+                                    ? ` · ${unpricedCount.toLocaleString()} unpriced`
+                                    : ''
+                            }
+                        </small>
+                    </article>
+                </div>
+
+                <div class="tqm-networth-range">
+                    <div class="tqm-networth-range-options">
+                        ${NET_WORTH_RANGE_OPTIONS.map(option => `
+                            <button
+                                type="button"
+                                class="${option.id === rangeId ? 'tqm-active' : ''}"
+                                data-tqm-networth-range="${option.id}"
+                            >${option.label}</button>
+                        `).join('')}
+                    </div>
+                    <button
+                        type="button"
+                        class="tqm-action tqm-secondary"
+                        id="tqm-clear-networth-history"
+                    >Clear History</button>
+                </div>
+
+                ${sparkline ? `
+                    <div class="tqm-networth-chart">
+                        <svg viewBox="0 0 ${sparkline.width} ${sparkline.height}" preserveAspectRatio="none">
+                            <path d="${sparkline.areaPath}" class="tqm-networth-area"></path>
+                            <path d="${sparkline.linePath}" class="tqm-networth-line"></path>
+                        </svg>
+                        <div class="tqm-networth-chart-scale">
+                            <span>${formatGold(sparkline.maxValue, { allowZero: true })}</span>
+                            <span>${formatGold(sparkline.minValue, { allowZero: true })}</span>
+                        </div>
+                    </div>
+                ` : `
+                    <p class="tqm-note">
+                        Not enough history yet for this range — Quartermaster
+                        records a snapshot every 5 minutes while the game tab
+                        is open, so check back after a little more playtime.
+                    </p>
+                `}
+            </section>
+
+            <section class="tqm-card">
+                <h2>Warehouses Tracked</h2>
+                <p class="tqm-note">
+                    Each city has its own warehouse. Open a city's warehouse
+                    with Quartermaster running to add it to Net Worth — cities
+                    marked "Not visited" aren't counted yet.
+                </p>
+                <div class="tqm-settings-status-grid">
+                    ${cityRows}
+                </div>
+            </section>
+        `;
     }
 
     function renderOverview() {
@@ -11680,6 +12238,7 @@
                 tab === 'planner' ? renderCraftingPlanner() :
                 tab === 'simulator' ? renderMasterySimulator() :
                 tab === 'ship' ? renderShipBuilder() :
+                tab === 'history' ? renderNetWorthHistory() :
                 tab === 'mastery' ? renderMastery() :
                 tab === 'captured' && state.developerMode
                     ? renderCaptured()
@@ -11858,6 +12417,28 @@
                 });
             }
         );
+
+        document.querySelectorAll('[data-tqm-networth-range]').forEach(
+            button => {
+                button.addEventListener('click', () => {
+                    state.preferences = {
+                        ...state.preferences,
+                        netWorthHistoryRange: button.dataset.tqmNetworthRange
+                    };
+
+                    saveState();
+                    renderActiveTab('history');
+                });
+            }
+        );
+
+        document.querySelector('#tqm-clear-networth-history')
+            ?.addEventListener('click', () => {
+                state.netWorthHistory = [];
+                saveState();
+                showToast('Net Worth history cleared.');
+                renderActiveTab('history');
+            });
 
         document.querySelector(
             '#tqm-toggle-inventory-panel'
@@ -13017,6 +13598,7 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
                     <button data-tqm-tab="planner">Queue Planner</button>
                     <button data-tqm-tab="simulator">Mastery Simulator</button>
                     <button data-tqm-tab="ship">Ship Builder</button>
+                    <button data-tqm-tab="history">Net Worth</button>
                     ${state.developerMode
                         ? '<button data-tqm-tab="captured">Captured Data</button>'
                         : ''}
@@ -13676,6 +14258,76 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
 
         .tqm-state-muted {
             opacity: .65;
+        }
+
+        .tqm-networth-range {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            margin-bottom: 14px;
+        }
+
+        .tqm-networth-range-options {
+            display: flex;
+            gap: 8px;
+        }
+
+        .tqm-networth-range button {
+            padding: 6px 14px;
+            background: rgba(0, 0, 0, .18);
+            border: 1px solid rgba(197, 160, 89, .22);
+            border-radius: 5px;
+            color: rgba(232, 224, 208, .72);
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: .04em;
+            cursor: pointer;
+        }
+
+        .tqm-networth-range button:hover {
+            border-color: rgba(197, 160, 89, .5);
+            color: #f2eee4;
+        }
+
+        .tqm-networth-range button.tqm-active {
+            background: rgba(197, 160, 89, .16);
+            border-color: rgba(197, 160, 89, .6);
+            color: var(--gold, #c5a059);
+        }
+
+        .tqm-networth-chart {
+            position: relative;
+            padding: 12px;
+            background: rgba(0, 0, 0, .18);
+            border: 1px solid rgba(197, 160, 89, .18);
+            border-radius: 6px;
+        }
+
+        .tqm-networth-chart svg {
+            display: block;
+            width: 100%;
+            height: 200px;
+        }
+
+        .tqm-networth-area {
+            fill: rgba(197, 160, 89, .14);
+            stroke: none;
+        }
+
+        .tqm-networth-line {
+            fill: none;
+            stroke: var(--gold, #c5a059);
+            stroke-width: 2;
+            vector-effect: non-scaling-stroke;
+        }
+
+        .tqm-networth-chart-scale {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 8px;
+            color: rgba(232, 224, 208, .5);
+            font-size: 11px;
         }
 
         .tqm-ship-heading-actions {
@@ -17631,6 +18283,14 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
         runPassiveDataFallback();
         window.setInterval(runPassiveDataFallback, 7000);
     }, 3300);
+
+    window.setTimeout(() => {
+        recordNetWorthSnapshot();
+        window.setInterval(
+            recordNetWorthSnapshot,
+            NET_WORTH_SNAPSHOT_INTERVAL_MS
+        );
+    }, 5000);
 
     console.info(
         `[Tidefall Quartermaster] Loaded v${VERSION} (${BUILD_ID})`
