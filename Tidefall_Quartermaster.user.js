@@ -117,7 +117,7 @@
         shipBuilder: {
             selectedShip: 'Brig',
             name: 'Brig Standard',
-            wood: 'Maple',
+            wood: 'Fenn',
             metal: 'Darkiron',
             planks: 4500,
             beams: 2400,
@@ -177,8 +177,8 @@
     };
 
     const WOODS = [
-        'Pine', 'Oak', 'Willow', 'Maple', 'Teak',
-        'Mahogany', 'Yew', 'Blackwood', 'Ironbark', 'Elderwood'
+        'Pine', 'Oak', 'Fallow', 'Fenn', 'Bracken',
+        'Tallow', 'Madder', 'Silkwood', 'Flint', 'Holtwood'
     ];
 
     const METALS = [
@@ -213,7 +213,7 @@
         },
         Sloop: {
             name: 'Sloop Standard',
-            wood: 'Willow',
+            wood: 'Fallow',
             metal: 'Cinder',
             planks: 1875,
             beams: 1000,
@@ -223,7 +223,7 @@
         },
         Brig: {
             name: 'Brig Standard',
-            wood: 'Maple',
+            wood: 'Fenn',
             metal: 'Darkiron',
             planks: 4500,
             beams: 2400,
@@ -233,7 +233,7 @@
         },
         Brigantine: {
             name: 'Brigantine Standard',
-            wood: 'Teak',
+            wood: 'Bracken',
             metal: 'Mithril',
             planks: 9000,
             beams: 4800,
@@ -243,7 +243,7 @@
         },
         Corvette: {
             name: 'Corvette Standard',
-            wood: 'Mahogany',
+            wood: 'Tallow',
             metal: 'Adamantite',
             planks: 16000,
             beams: 8000,
@@ -253,7 +253,7 @@
         },
         Frigate: {
             name: 'Frigate Standard',
-            wood: 'Yew',
+            wood: 'Madder',
             metal: 'Starmetal',
             planks: 32000,
             beams: 14000,
@@ -263,7 +263,7 @@
         },
         Galleon: {
             name: 'Galleon Standard',
-            wood: 'Blackwood',
+            wood: 'Silkwood',
             metal: 'Stormglass',
             planks: 48000,
             beams: 22000,
@@ -273,7 +273,7 @@
         },
         'Man-of-War': {
             name: 'Man-of-War Standard',
-            wood: 'Ironbark',
+            wood: 'Flint',
             metal: 'Leviathan',
             planks: 78000,
             beams: 36000,
@@ -283,7 +283,7 @@
         },
         'Ship of the Line': {
             name: 'Ship of the Line Standard',
-            wood: 'Elderwood',
+            wood: 'Holtwood',
             metal: 'Abyssal',
             planks: 120000,
             beams: 56000,
@@ -300,14 +300,14 @@
     const WOOD_CRAFT_TIMES = {
         Pine: { plank: 6, beam: 12 },
         Oak: { plank: 10, beam: 20 },
-        Willow: { plank: 14, beam: 28 },
-        Maple: { plank: 18, beam: 36 },
-        Teak: { plank: 22, beam: 44 },
-        Mahogany: { plank: 30, beam: 60 },
-        Yew: { plank: 38, beam: 76 },
-        Blackwood: { plank: 46, beam: 92 },
-        Ironbark: { plank: 52, beam: 104 },
-        Elderwood: { plank: 60, beam: 120 }
+        Fallow: { plank: 14, beam: 28 },
+        Fenn: { plank: 18, beam: 36 },
+        Bracken: { plank: 22, beam: 44 },
+        Tallow: { plank: 30, beam: 60 },
+        Madder: { plank: 38, beam: 76 },
+        Silkwood: { plank: 46, beam: 92 },
+        Flint: { plank: 52, beam: 104 },
+        Holtwood: { plank: 60, beam: 120 }
     };
 
     const METAL_CRAFT_TIMES = {
@@ -333,14 +333,14 @@
     const WOOD_REQUIRED_LEVELS = {
         Pine: 1,
         Oak: 5,
-        Willow: 10,
-        Maple: 15,
-        Teak: 25,
-        Mahogany: 40,
-        Yew: 55,
-        Blackwood: 70,
-        Ironbark: 75,
-        Elderwood: 90
+        Fallow: 10,
+        Fenn: 15,
+        Bracken: 25,
+        Tallow: 40,
+        Madder: 55,
+        Silkwood: 70,
+        Flint: 75,
+        Holtwood: 90
     };
 
     const BAR_REQUIRED_LEVELS = {
@@ -389,27 +389,27 @@
     const VENDOR_LOG_VALUES = {
         Pine: 2,
         Oak: 4,
-        Willow: 6,
-        Maple: 8,
-        Teak: 10,
-        Mahogany: 15,
-        Yew: 20,
-        Blackwood: 26,
-        Ironbark: 33,
-        Elderwood: 42
+        Fallow: 6,
+        Fenn: 8,
+        Bracken: 10,
+        Tallow: 15,
+        Madder: 20,
+        Silkwood: 26,
+        Flint: 33,
+        Holtwood: 42
     };
 
     const METAL_FUEL_LOG = {
         Copper: 'Pine',
         Iron: 'Oak',
-        Cinder: 'Willow',
-        Darkiron: 'Maple',
-        Mithril: 'Teak',
-        Adamantite: 'Mahogany',
-        Starmetal: 'Yew',
-        Stormglass: 'Blackwood',
-        Leviathan: 'Ironbark',
-        Abyssal: 'Elderwood'
+        Cinder: 'Fallow',
+        Darkiron: 'Fenn',
+        Mithril: 'Bracken',
+        Adamantite: 'Tallow',
+        Starmetal: 'Madder',
+        Stormglass: 'Silkwood',
+        Leviathan: 'Flint',
+        Abyssal: 'Holtwood'
     };
 
     const SMELTING_SUPPLY_FEES = Object.fromEntries(
@@ -455,8 +455,8 @@
         'Adamantite Bar': 57,
         'Adamantite Nails': 20,
         'Adamantite Ore': 19,
-        'Blackwood Beam': 156,
-        'Blackwood Plank': 52,
+        'Silkwood Beam': 156,
+        'Silkwood Plank': 52,
         'Caulking Kit': 54,
         'Cinder 6-Pounder': 1300,
         'Cinder Bar': 30,
@@ -481,8 +481,8 @@
         'Dreadwhale Feast': 90,
         'Dried Sardines': 18,
         'Eel Bait': 8,
-        'Elderwood Beam': 252,
-        'Elderwood Plank': 84,
+        'Holtwood Beam': 252,
+        'Holtwood Plank': 84,
         'Grilled Salmon': 30,
         'Hull Repair Kit': 92,
         'Hull Restoration Kit': 1350,
@@ -490,17 +490,17 @@
         'Iron Bar': 18,
         'Iron Nails': 6,
         'Iron Ore': 6,
-        'Ironbark Beam': 198,
-        'Ironbark Plank': 66,
+        'Flint Beam': 198,
+        'Flint Plank': 66,
         'Leviathan 32-Pounder': 28000,
         'Leviathan Bar': 99,
         'Leviathan Nails': 54,
         'Leviathan Ore': 33,
         'Mackerel': 5,
-        'Mahogany Beam': 90,
-        'Mahogany Plank': 30,
-        'Maple Beam': 48,
-        'Maple Plank': 16,
+        'Tallow Beam': 90,
+        'Tallow Plank': 30,
+        'Fenn Beam': 48,
+        'Fenn Plank': 16,
         'Master Refit Crate': 3350,
         'Master Repair Kit': 745,
         'Minnow Bait': 4,
@@ -538,15 +538,15 @@
         'Stormray Fillet': 68,
         'Swordfish': 21,
         'Swordfish Cuts': 42,
-        'Teak Beam': 60,
-        'Teak Plank': 20,
+        'Bracken Beam': 60,
+        'Bracken Plank': 20,
         'Tuna': 16,
         'Tuna Rations': 14,
-        'Willow Beam': 36,
-        'Willow Plank': 12,
+        'Fallow Beam': 36,
+        'Fallow Plank': 12,
         'Worm Bait': 2,
-        'Yew Beam': 120,
-        'Yew Plank': 40
+        'Madder Beam': 120,
+        'Madder Plank': 40
     };
 
     /*
@@ -806,13 +806,13 @@
         { item: 'Salted Mackerel', ingredient: 'Mackerel', level: 1, cycle: 5, fee: 2, fuelLog: 'Pine Log' },
         { item: 'Dried Sardines', ingredient: 'Sardine', level: 5, cycle: 6, fee: 2, fuelLog: 'Pine Log' },
         { item: 'Cod Stew', ingredient: 'Cod', level: 10, cycle: 10, fee: 4, fuelLog: 'Oak Log' },
-        { item: 'Grilled Salmon', ingredient: 'Salmon', level: 20, cycle: 15, fee: 6, fuelLog: 'Willow Log' },
+        { item: 'Grilled Salmon', ingredient: 'Salmon', level: 20, cycle: 15, fee: 6, fuelLog: 'Fallow Log' },
         { item: 'Tuna Rations', ingredient: 'Tuna', level: 30, cycle: 18, fee: 4, fuelLog: 'Oak Log' },
-        { item: 'Swordfish Cuts', ingredient: 'Swordfish', level: 40, cycle: 22, fee: 8, fuelLog: 'Maple Log' },
-        { item: 'Shark Haunch', ingredient: 'Shark', level: 50, cycle: 28, fee: 10, fuelLog: 'Teak Log' },
-        { item: 'Deepfin Steaks', ingredient: 'Deepfin Tuna', level: 60, cycle: 35, fee: 15, fuelLog: 'Mahogany Log' },
-        { item: 'Stormray Fillet', ingredient: 'Stormray', level: 80, cycle: 45, fee: 26, fuelLog: 'Blackwood Log' },
-        { item: 'Dreadwhale Feast', ingredient: 'Dreadwhale', level: 90, cycle: 60, fee: 42, fuelLog: 'Elderwood Log' }
+        { item: 'Swordfish Cuts', ingredient: 'Swordfish', level: 40, cycle: 22, fee: 8, fuelLog: 'Fenn Log' },
+        { item: 'Shark Haunch', ingredient: 'Shark', level: 50, cycle: 28, fee: 10, fuelLog: 'Bracken Log' },
+        { item: 'Deepfin Steaks', ingredient: 'Deepfin Tuna', level: 60, cycle: 35, fee: 15, fuelLog: 'Tallow Log' },
+        { item: 'Stormray Fillet', ingredient: 'Stormray', level: 80, cycle: 45, fee: 26, fuelLog: 'Silkwood Log' },
+        { item: 'Dreadwhale Feast', ingredient: 'Dreadwhale', level: 90, cycle: 60, fee: 42, fuelLog: 'Holtwood Log' }
     ];
 
     const SUPPORTED_XP_SKILLS = [
@@ -830,14 +830,14 @@
         // Logging
         { skill: 'logging', item: 'Pine Log', level: 1, xp: 2, cycle: 6, ingredients: [] },
         { skill: 'logging', item: 'Oak Log', level: 5, xp: 5, cycle: 10, ingredients: [] },
-        { skill: 'logging', item: 'Willow Log', level: 10, xp: 8, cycle: 14, ingredients: [] },
-        { skill: 'logging', item: 'Maple Log', level: 15, xp: 12, cycle: 18, ingredients: [] },
-        { skill: 'logging', item: 'Teak Log', level: 25, xp: 18, cycle: 22, ingredients: [] },
-        { skill: 'logging', item: 'Mahogany Log', level: 40, xp: 25, cycle: 30, ingredients: [] },
-        { skill: 'logging', item: 'Yew Log', level: 55, xp: 32, cycle: 38, ingredients: [] },
-        { skill: 'logging', item: 'Blackwood Log', level: 65, xp: 40, cycle: 46, ingredients: [] },
-        { skill: 'logging', item: 'Ironbark Log', level: 75, xp: 50, cycle: 52, ingredients: [] },
-        { skill: 'logging', item: 'Elderwood Log', level: 90, xp: 60, cycle: 60, ingredients: [] },
+        { skill: 'logging', item: 'Fallow Log', level: 10, xp: 8, cycle: 14, ingredients: [] },
+        { skill: 'logging', item: 'Fenn Log', level: 15, xp: 12, cycle: 18, ingredients: [] },
+        { skill: 'logging', item: 'Bracken Log', level: 25, xp: 18, cycle: 22, ingredients: [] },
+        { skill: 'logging', item: 'Tallow Log', level: 40, xp: 25, cycle: 30, ingredients: [] },
+        { skill: 'logging', item: 'Madder Log', level: 55, xp: 32, cycle: 38, ingredients: [] },
+        { skill: 'logging', item: 'Silkwood Log', level: 65, xp: 40, cycle: 46, ingredients: [] },
+        { skill: 'logging', item: 'Flint Log', level: 75, xp: 50, cycle: 52, ingredients: [] },
+        { skill: 'logging', item: 'Holtwood Log', level: 90, xp: 60, cycle: 60, ingredients: [] },
 
         // Mining
         { skill: 'mining', item: 'Copper Ore', level: 1, xp: 2, cycle: 8, ingredients: [] },
@@ -868,22 +868,22 @@
         { skill: 'carpentry', item: 'Pine Beam', level: 1, xp: 4, cycle: 12, ingredients: [{ name: 'Pine Plank', quantity: 2 }] },
         { skill: 'carpentry', item: 'Oak Plank', level: 5, xp: 5, cycle: 10, ingredients: [{ name: 'Oak Log', quantity: 1 }] },
         { skill: 'carpentry', item: 'Oak Beam', level: 5, xp: 10, cycle: 20, ingredients: [{ name: 'Oak Plank', quantity: 2 }] },
-        { skill: 'carpentry', item: 'Willow Plank', level: 10, xp: 8, cycle: 14, ingredients: [{ name: 'Willow Log', quantity: 1 }] },
-        { skill: 'carpentry', item: 'Willow Beam', level: 10, xp: 16, cycle: 28, ingredients: [{ name: 'Willow Plank', quantity: 2 }] },
-        { skill: 'carpentry', item: 'Maple Plank', level: 15, xp: 12, cycle: 18, ingredients: [{ name: 'Maple Log', quantity: 1 }] },
-        { skill: 'carpentry', item: 'Maple Beam', level: 15, xp: 24, cycle: 36, ingredients: [{ name: 'Maple Plank', quantity: 2 }] },
-        { skill: 'carpentry', item: 'Teak Plank', level: 25, xp: 18, cycle: 22, ingredients: [{ name: 'Teak Log', quantity: 1 }] },
-        { skill: 'carpentry', item: 'Teak Beam', level: 25, xp: 36, cycle: 44, ingredients: [{ name: 'Teak Plank', quantity: 2 }] },
-        { skill: 'carpentry', item: 'Mahogany Plank', level: 40, xp: 25, cycle: 30, ingredients: [{ name: 'Mahogany Log', quantity: 1 }] },
-        { skill: 'carpentry', item: 'Mahogany Beam', level: 40, xp: 50, cycle: 60, ingredients: [{ name: 'Mahogany Plank', quantity: 2 }] },
-        { skill: 'carpentry', item: 'Yew Plank', level: 55, xp: 32, cycle: 38, ingredients: [{ name: 'Yew Log', quantity: 1 }] },
-        { skill: 'carpentry', item: 'Yew Beam', level: 55, xp: 64, cycle: 76, ingredients: [{ name: 'Yew Plank', quantity: 2 }] },
-        { skill: 'carpentry', item: 'Blackwood Plank', level: 70, xp: 40, cycle: 46, ingredients: [{ name: 'Blackwood Log', quantity: 1 }] },
-        { skill: 'carpentry', item: 'Blackwood Beam', level: 70, xp: 80, cycle: 92, ingredients: [{ name: 'Blackwood Plank', quantity: 2 }] },
-        { skill: 'carpentry', item: 'Ironbark Plank', level: 75, xp: 50, cycle: 52, ingredients: [{ name: 'Ironbark Log', quantity: 1 }] },
-        { skill: 'carpentry', item: 'Ironbark Beam', level: 75, xp: 100, cycle: 104, ingredients: [{ name: 'Ironbark Plank', quantity: 2 }] },
-        { skill: 'carpentry', item: 'Elderwood Plank', level: 90, xp: 60, cycle: 60, ingredients: [{ name: 'Elderwood Log', quantity: 1 }] },
-        { skill: 'carpentry', item: 'Elderwood Beam', level: 90, xp: 120, cycle: 120, ingredients: [{ name: 'Elderwood Plank', quantity: 2 }] },
+        { skill: 'carpentry', item: 'Fallow Plank', level: 10, xp: 8, cycle: 14, ingredients: [{ name: 'Fallow Log', quantity: 1 }] },
+        { skill: 'carpentry', item: 'Fallow Beam', level: 10, xp: 16, cycle: 28, ingredients: [{ name: 'Fallow Plank', quantity: 2 }] },
+        { skill: 'carpentry', item: 'Fenn Plank', level: 15, xp: 12, cycle: 18, ingredients: [{ name: 'Fenn Log', quantity: 1 }] },
+        { skill: 'carpentry', item: 'Fenn Beam', level: 15, xp: 24, cycle: 36, ingredients: [{ name: 'Fenn Plank', quantity: 2 }] },
+        { skill: 'carpentry', item: 'Bracken Plank', level: 25, xp: 18, cycle: 22, ingredients: [{ name: 'Bracken Log', quantity: 1 }] },
+        { skill: 'carpentry', item: 'Bracken Beam', level: 25, xp: 36, cycle: 44, ingredients: [{ name: 'Bracken Plank', quantity: 2 }] },
+        { skill: 'carpentry', item: 'Tallow Plank', level: 40, xp: 25, cycle: 30, ingredients: [{ name: 'Tallow Log', quantity: 1 }] },
+        { skill: 'carpentry', item: 'Tallow Beam', level: 40, xp: 50, cycle: 60, ingredients: [{ name: 'Tallow Plank', quantity: 2 }] },
+        { skill: 'carpentry', item: 'Madder Plank', level: 55, xp: 32, cycle: 38, ingredients: [{ name: 'Madder Log', quantity: 1 }] },
+        { skill: 'carpentry', item: 'Madder Beam', level: 55, xp: 64, cycle: 76, ingredients: [{ name: 'Madder Plank', quantity: 2 }] },
+        { skill: 'carpentry', item: 'Silkwood Plank', level: 70, xp: 40, cycle: 46, ingredients: [{ name: 'Silkwood Log', quantity: 1 }] },
+        { skill: 'carpentry', item: 'Silkwood Beam', level: 70, xp: 80, cycle: 92, ingredients: [{ name: 'Silkwood Plank', quantity: 2 }] },
+        { skill: 'carpentry', item: 'Flint Plank', level: 75, xp: 50, cycle: 52, ingredients: [{ name: 'Flint Log', quantity: 1 }] },
+        { skill: 'carpentry', item: 'Flint Beam', level: 75, xp: 100, cycle: 104, ingredients: [{ name: 'Flint Plank', quantity: 2 }] },
+        { skill: 'carpentry', item: 'Holtwood Plank', level: 90, xp: 60, cycle: 60, ingredients: [{ name: 'Holtwood Log', quantity: 1 }] },
+        { skill: 'carpentry', item: 'Holtwood Beam', level: 90, xp: 120, cycle: 120, ingredients: [{ name: 'Holtwood Plank', quantity: 2 }] },
 
         // Smelting
         { skill: 'smelting', item: 'Copper Bar', level: 1, xp: 2, cycle: 8, ingredients: [{ name: 'Copper Ore', quantity: 2 }] },
@@ -915,42 +915,42 @@
         { skill: 'smithing', item: 'Cinder Round Shot', level: 10, xp: 10, cycle: 6, ingredients: [{ name: 'Cinder Bar', quantity: 1 }] },
         { skill: 'smithing', item: 'Cinder Chain Shot', level: 10, xp: 10, cycle: 6, ingredients: [{ name: 'Cinder Bar', quantity: 1 }] },
         { skill: 'smithing', item: 'Cinder Grape Shot', level: 10, xp: 10, cycle: 6, ingredients: [{ name: 'Cinder Bar', quantity: 1 }] },
-        { skill: 'smithing', item: 'Cinder 6-Pounder', level: 10, xp: 35, cycle: 60, ingredients: [{ name: 'Cinder Bar', quantity: 24 }, { name: 'Willow Beam', quantity: 7 }] },
+        { skill: 'smithing', item: 'Cinder 6-Pounder', level: 10, xp: 35, cycle: 60, ingredients: [{ name: 'Cinder Bar', quantity: 24 }, { name: 'Fallow Beam', quantity: 7 }] },
 
         { skill: 'smithing', item: 'Darkiron Round Shot', level: 20, xp: 14, cycle: 8, ingredients: [{ name: 'Darkiron Bar', quantity: 1 }] },
         { skill: 'smithing', item: 'Darkiron Chain Shot', level: 20, xp: 14, cycle: 8, ingredients: [{ name: 'Darkiron Bar', quantity: 1 }] },
         { skill: 'smithing', item: 'Darkiron Grape Shot', level: 20, xp: 14, cycle: 8, ingredients: [{ name: 'Darkiron Bar', quantity: 1 }] },
-        { skill: 'smithing', item: 'Darkiron 8-Pounder', level: 20, xp: 60, cycle: 90, ingredients: [{ name: 'Darkiron Bar', quantity: 28 }, { name: 'Maple Beam', quantity: 8 }] },
+        { skill: 'smithing', item: 'Darkiron 8-Pounder', level: 20, xp: 60, cycle: 90, ingredients: [{ name: 'Darkiron Bar', quantity: 28 }, { name: 'Fenn Beam', quantity: 8 }] },
 
         { skill: 'smithing', item: 'Mithril Round Shot', level: 30, xp: 20, cycle: 10, ingredients: [{ name: 'Mithril Bar', quantity: 1 }] },
         { skill: 'smithing', item: 'Mithril Chain Shot', level: 30, xp: 20, cycle: 10, ingredients: [{ name: 'Mithril Bar', quantity: 1 }] },
         { skill: 'smithing', item: 'Mithril Grape Shot', level: 30, xp: 20, cycle: 10, ingredients: [{ name: 'Mithril Bar', quantity: 1 }] },
-        { skill: 'smithing', item: 'Mithril 9-Pounder', level: 30, xp: 90, cycle: 120, ingredients: [{ name: 'Mithril Bar', quantity: 34 }, { name: 'Teak Beam', quantity: 10 }] },
+        { skill: 'smithing', item: 'Mithril 9-Pounder', level: 30, xp: 90, cycle: 120, ingredients: [{ name: 'Mithril Bar', quantity: 34 }, { name: 'Bracken Beam', quantity: 10 }] },
 
         { skill: 'smithing', item: 'Adamantite Round Shot', level: 40, xp: 26, cycle: 12, ingredients: [{ name: 'Adamantite Bar', quantity: 1 }] },
         { skill: 'smithing', item: 'Adamantite Chain Shot', level: 40, xp: 26, cycle: 12, ingredients: [{ name: 'Adamantite Bar', quantity: 1 }] },
         { skill: 'smithing', item: 'Adamantite Grape Shot', level: 40, xp: 26, cycle: 12, ingredients: [{ name: 'Adamantite Bar', quantity: 1 }] },
-        { skill: 'smithing', item: 'Adamantite 12-Pounder', level: 40, xp: 150, cycle: 180, ingredients: [{ name: 'Adamantite Bar', quantity: 42 }, { name: 'Mahogany Beam', quantity: 13 }] },
+        { skill: 'smithing', item: 'Adamantite 12-Pounder', level: 40, xp: 150, cycle: 180, ingredients: [{ name: 'Adamantite Bar', quantity: 42 }, { name: 'Tallow Beam', quantity: 13 }] },
 
         { skill: 'smithing', item: 'Starmetal Round Shot', level: 50, xp: 32, cycle: 15, ingredients: [{ name: 'Starmetal Bar', quantity: 1 }] },
         { skill: 'smithing', item: 'Starmetal Chain Shot', level: 50, xp: 32, cycle: 15, ingredients: [{ name: 'Starmetal Bar', quantity: 1 }] },
         { skill: 'smithing', item: 'Starmetal Grape Shot', level: 50, xp: 32, cycle: 15, ingredients: [{ name: 'Starmetal Bar', quantity: 1 }] },
-        { skill: 'smithing', item: 'Starmetal 18-Pounder', level: 50, xp: 275, cycle: 300, ingredients: [{ name: 'Starmetal Bar', quantity: 55 }, { name: 'Yew Beam', quantity: 17 }] },
+        { skill: 'smithing', item: 'Starmetal 18-Pounder', level: 50, xp: 275, cycle: 300, ingredients: [{ name: 'Starmetal Bar', quantity: 55 }, { name: 'Madder Beam', quantity: 17 }] },
 
         { skill: 'smithing', item: 'Stormglass Round Shot', level: 60, xp: 38, cycle: 18, ingredients: [{ name: 'Stormglass Bar', quantity: 1 }] },
         { skill: 'smithing', item: 'Stormglass Chain Shot', level: 60, xp: 38, cycle: 18, ingredients: [{ name: 'Stormglass Bar', quantity: 1 }] },
         { skill: 'smithing', item: 'Stormglass Grape Shot', level: 60, xp: 38, cycle: 18, ingredients: [{ name: 'Stormglass Bar', quantity: 1 }] },
-        { skill: 'smithing', item: 'Stormglass 24-Pounder', level: 60, xp: 600, cycle: 600, ingredients: [{ name: 'Stormglass Bar', quantity: 80 }, { name: 'Blackwood Beam', quantity: 24 }] },
+        { skill: 'smithing', item: 'Stormglass 24-Pounder', level: 60, xp: 600, cycle: 600, ingredients: [{ name: 'Stormglass Bar', quantity: 80 }, { name: 'Silkwood Beam', quantity: 24 }] },
 
         { skill: 'smithing', item: 'Leviathan Round Shot', level: 70, xp: 48, cycle: 25, ingredients: [{ name: 'Leviathan Bar', quantity: 1 }] },
         { skill: 'smithing', item: 'Leviathan Chain Shot', level: 70, xp: 48, cycle: 25, ingredients: [{ name: 'Leviathan Bar', quantity: 1 }] },
         { skill: 'smithing', item: 'Leviathan Grape Shot', level: 70, xp: 48, cycle: 25, ingredients: [{ name: 'Leviathan Bar', quantity: 1 }] },
-        { skill: 'smithing', item: 'Leviathan 32-Pounder', level: 70, xp: 975, cycle: 900, ingredients: [{ name: 'Leviathan Bar', quantity: 150 }, { name: 'Ironbark Beam', quantity: 40 }] },
+        { skill: 'smithing', item: 'Leviathan 32-Pounder', level: 70, xp: 975, cycle: 900, ingredients: [{ name: 'Leviathan Bar', quantity: 150 }, { name: 'Flint Beam', quantity: 40 }] },
 
         { skill: 'smithing', item: 'Abyssal Round Shot', level: 80, xp: 60, cycle: 35, ingredients: [{ name: 'Abyssal Bar', quantity: 1 }] },
         { skill: 'smithing', item: 'Abyssal Chain Shot', level: 80, xp: 60, cycle: 35, ingredients: [{ name: 'Abyssal Bar', quantity: 1 }] },
         { skill: 'smithing', item: 'Abyssal Grape Shot', level: 80, xp: 60, cycle: 35, ingredients: [{ name: 'Abyssal Bar', quantity: 1 }] },
-        { skill: 'smithing', item: 'Abyssal 42-Pounder', level: 80, xp: 2100, cycle: 1800, ingredients: [{ name: 'Abyssal Bar', quantity: 350 }, { name: 'Elderwood Beam', quantity: 60 }] },
+        { skill: 'smithing', item: 'Abyssal 42-Pounder', level: 80, xp: 2100, cycle: 1800, ingredients: [{ name: 'Abyssal Bar', quantity: 350 }, { name: 'Holtwood Beam', quantity: 60 }] },
 
         // Cooking
         { skill: 'cooking', item: 'Salted Mackerel', level: 1, xp: 7, cycle: 5, ingredients: [{ name: 'Mackerel', quantity: 1 }] },
@@ -970,21 +970,21 @@
         { skill: 'crafting', item: 'Iron Nails', level: 5, xp: 6, cycle: 5, ingredients: [{ name: 'Iron Bar', quantity: 1 }] },
         { skill: 'crafting', item: 'Caulking Kit', level: 5, xp: 6, cycle: 14, ingredients: [{ name: 'Iron Nails', quantity: 3 }, { name: 'Oak Plank', quantity: 3 }] },
         { skill: 'crafting', item: 'Cinder Nails', level: 10, xp: 10, cycle: 6, ingredients: [{ name: 'Cinder Bar', quantity: 1 }] },
-        { skill: 'crafting', item: 'Hull Repair Kit', level: 10, xp: 10, cycle: 18, ingredients: [{ name: 'Cinder Nails', quantity: 3 }, { name: 'Willow Plank', quantity: 4 }] },
+        { skill: 'crafting', item: 'Hull Repair Kit', level: 10, xp: 10, cycle: 18, ingredients: [{ name: 'Cinder Nails', quantity: 3 }, { name: 'Fallow Plank', quantity: 4 }] },
         { skill: 'crafting', item: 'Darkiron Nails', level: 15, xp: 14, cycle: 8, ingredients: [{ name: 'Darkiron Bar', quantity: 1 }] },
-        { skill: 'crafting', item: 'Deck Repair Kit', level: 15, xp: 14, cycle: 22, ingredients: [{ name: 'Darkiron Nails', quantity: 4 }, { name: 'Maple Plank', quantity: 5 }] },
+        { skill: 'crafting', item: 'Deck Repair Kit', level: 15, xp: 14, cycle: 22, ingredients: [{ name: 'Darkiron Nails', quantity: 4 }, { name: 'Fenn Plank', quantity: 5 }] },
         { skill: 'crafting', item: 'Mithril Nails', level: 25, xp: 20, cycle: 10, ingredients: [{ name: 'Mithril Bar', quantity: 1 }] },
-        { skill: 'crafting', item: 'Reinforcement Kit', level: 25, xp: 22, cycle: 28, ingredients: [{ name: 'Mithril Nails', quantity: 4 }, { name: 'Teak Plank', quantity: 6 }] },
+        { skill: 'crafting', item: 'Reinforcement Kit', level: 25, xp: 22, cycle: 28, ingredients: [{ name: 'Mithril Nails', quantity: 4 }, { name: 'Bracken Plank', quantity: 6 }] },
         { skill: 'crafting', item: 'Adamantite Nails', level: 40, xp: 26, cycle: 12, ingredients: [{ name: 'Adamantite Bar', quantity: 1 }] },
-        { skill: 'crafting', item: 'Shipwright Kit', level: 40, xp: 30, cycle: 34, ingredients: [{ name: 'Adamantite Nails', quantity: 5 }, { name: 'Mahogany Plank', quantity: 6 }] },
+        { skill: 'crafting', item: 'Shipwright Kit', level: 40, xp: 30, cycle: 34, ingredients: [{ name: 'Adamantite Nails', quantity: 5 }, { name: 'Tallow Plank', quantity: 6 }] },
         { skill: 'crafting', item: 'Starmetal Nails', level: 55, xp: 32, cycle: 15, ingredients: [{ name: 'Starmetal Bar', quantity: 1 }] },
-        { skill: 'crafting', item: 'Master Repair Kit', level: 55, xp: 38, cycle: 42, ingredients: [{ name: 'Starmetal Nails', quantity: 5 }, { name: 'Yew Plank', quantity: 8 }] },
+        { skill: 'crafting', item: 'Master Repair Kit', level: 55, xp: 38, cycle: 42, ingredients: [{ name: 'Starmetal Nails', quantity: 5 }, { name: 'Madder Plank', quantity: 8 }] },
         { skill: 'crafting', item: 'Stormglass Nails', level: 70, xp: 38, cycle: 18, ingredients: [{ name: 'Stormglass Bar', quantity: 1 }] },
-        { skill: 'crafting', item: 'Hull Restoration Kit', level: 70, xp: 48, cycle: 50, ingredients: [{ name: 'Stormglass Nails', quantity: 6 }, { name: 'Blackwood Plank', quantity: 10 }] },
+        { skill: 'crafting', item: 'Hull Restoration Kit', level: 70, xp: 48, cycle: 50, ingredients: [{ name: 'Stormglass Nails', quantity: 6 }, { name: 'Silkwood Plank', quantity: 10 }] },
         { skill: 'crafting', item: 'Leviathan Nails', level: 80, xp: 48, cycle: 25, ingredients: [{ name: 'Leviathan Bar', quantity: 1 }] },
-        { skill: 'crafting', item: 'Refit Crate', level: 80, xp: 58, cycle: 58, ingredients: [{ name: 'Leviathan Nails', quantity: 8 }, { name: 'Ironbark Plank', quantity: 12 }] },
+        { skill: 'crafting', item: 'Refit Crate', level: 80, xp: 58, cycle: 58, ingredients: [{ name: 'Leviathan Nails', quantity: 8 }, { name: 'Flint Plank', quantity: 12 }] },
         { skill: 'crafting', item: 'Abyssal Nails', level: 90, xp: 60, cycle: 35, ingredients: [{ name: 'Abyssal Bar', quantity: 1 }] },
-        { skill: 'crafting', item: 'Master Refit Crate', level: 90, xp: 72, cycle: 70, ingredients: [{ name: 'Abyssal Nails', quantity: 10 }, { name: 'Elderwood Plank', quantity: 15 }] }
+        { skill: 'crafting', item: 'Master Refit Crate', level: 90, xp: 72, cycle: 70, ingredients: [{ name: 'Abyssal Nails', quantity: 10 }, { name: 'Holtwood Plank', quantity: 15 }] }
     ];
 
     function xpRecipeKey(skill, item) {
@@ -1704,7 +1704,7 @@
 
         /*
          * Smithing cards contain ingredient labels such as
-         * "55x Starmetal Bar" and "17x Yew Beam". The generic title/name
+         * "55x Starmetal Bar" and "17x Madder Beam". The generic title/name
          * selector can accidentally select one of those labels. Match the
          * card against Quartermaster's canonical Smithing recipe names first
          * so the XP is attached to "Starmetal 18-Pounder", not its inputs.
@@ -6156,49 +6156,49 @@
         ]},
         { item: 'Hull Repair Kit', level: 10, cycle: 18, ingredients: [
             { name: 'Cinder Nails', quantity: 3 },
-            { name: 'Willow Plank', quantity: 4 }
+            { name: 'Fallow Plank', quantity: 4 }
         ]},
         { item: 'Deck Repair Kit', level: 15, cycle: 22, ingredients: [
             { name: 'Darkiron Nails', quantity: 4 },
-            { name: 'Maple Plank', quantity: 5 }
+            { name: 'Fenn Plank', quantity: 5 }
         ]},
         { item: 'Reinforcement Kit', level: 25, cycle: 28, ingredients: [
             { name: 'Mithril Nails', quantity: 4 },
-            { name: 'Teak Plank', quantity: 6 }
+            { name: 'Bracken Plank', quantity: 6 }
         ]},
         { item: 'Shipwright Kit', level: 40, cycle: 34, ingredients: [
             { name: 'Adamantite Nails', quantity: 5 },
-            { name: 'Mahogany Plank', quantity: 6 }
+            { name: 'Tallow Plank', quantity: 6 }
         ]},
         { item: 'Master Repair Kit', level: 55, cycle: 42, ingredients: [
             { name: 'Starmetal Nails', quantity: 5 },
-            { name: 'Yew Plank', quantity: 8 }
+            { name: 'Madder Plank', quantity: 8 }
         ]},
         { item: 'Hull Restoration Kit', level: 70, cycle: 50, ingredients: [
             { name: 'Stormglass Nails', quantity: 6 },
-            { name: 'Blackwood Plank', quantity: 10 }
+            { name: 'Silkwood Plank', quantity: 10 }
         ]},
         { item: 'Refit Crate', level: 80, cycle: 58, ingredients: [
             { name: 'Leviathan Nails', quantity: 8 },
-            { name: 'Ironbark Plank', quantity: 12 }
+            { name: 'Flint Plank', quantity: 12 }
         ]},
         { item: 'Master Refit Crate', level: 90, cycle: 70, ingredients: [
             { name: 'Abyssal Nails', quantity: 10 },
-            { name: 'Elderwood Plank', quantity: 15 }
+            { name: 'Holtwood Plank', quantity: 15 }
         ]}
     ];
 
     const CANNON_RECIPES = [
         { item: 'Copper 2-Pounder', metal: 'Copper', wood: 'Pine', level: 1, cycle: 30, bars: 20, beams: 5 },
         { item: 'Iron 4-Pounder', metal: 'Iron', wood: 'Oak', level: 5, cycle: 45, bars: 22, beams: 6 },
-        { item: 'Cinder 6-Pounder', metal: 'Cinder', wood: 'Willow', level: 10, cycle: 60, bars: 24, beams: 7 },
-        { item: 'Darkiron 8-Pounder', metal: 'Darkiron', wood: 'Maple', level: 20, cycle: 90, bars: 28, beams: 8 },
-        { item: 'Mithril 9-Pounder', metal: 'Mithril', wood: 'Teak', level: 30, cycle: 120, bars: 34, beams: 10 },
-        { item: 'Adamantite 12-Pounder', metal: 'Adamantite', wood: 'Mahogany', level: 40, cycle: 180, bars: 42, beams: 13 },
-        { item: 'Starmetal 18-Pounder', metal: 'Starmetal', wood: 'Yew', level: 50, cycle: 300, bars: 55, beams: 17 },
-        { item: 'Stormglass 24-Pounder', metal: 'Stormglass', wood: 'Blackwood', level: 60, cycle: 600, bars: 80, beams: 24 },
-        { item: 'Leviathan 32-Pounder', metal: 'Leviathan', wood: 'Ironbark', level: 70, cycle: 900, bars: 150, beams: 40 },
-        { item: 'Abyssal 42-Pounder', metal: 'Abyssal', wood: 'Elderwood', level: 80, cycle: 1800, bars: 350, beams: 60 }
+        { item: 'Cinder 6-Pounder', metal: 'Cinder', wood: 'Fallow', level: 10, cycle: 60, bars: 24, beams: 7 },
+        { item: 'Darkiron 8-Pounder', metal: 'Darkiron', wood: 'Fenn', level: 20, cycle: 90, bars: 28, beams: 8 },
+        { item: 'Mithril 9-Pounder', metal: 'Mithril', wood: 'Bracken', level: 30, cycle: 120, bars: 34, beams: 10 },
+        { item: 'Adamantite 12-Pounder', metal: 'Adamantite', wood: 'Tallow', level: 40, cycle: 180, bars: 42, beams: 13 },
+        { item: 'Starmetal 18-Pounder', metal: 'Starmetal', wood: 'Madder', level: 50, cycle: 300, bars: 55, beams: 17 },
+        { item: 'Stormglass 24-Pounder', metal: 'Stormglass', wood: 'Silkwood', level: 60, cycle: 600, bars: 80, beams: 24 },
+        { item: 'Leviathan 32-Pounder', metal: 'Leviathan', wood: 'Flint', level: 70, cycle: 900, bars: 150, beams: 40 },
+        { item: 'Abyssal 42-Pounder', metal: 'Abyssal', wood: 'Holtwood', level: 80, cycle: 1800, bars: 350, beams: 60 }
     ];
 
     function plannerRecipeCatalog() {
@@ -6795,7 +6795,7 @@
 
         const wood = WOODS.includes(state.shipBuilder?.wood)
             ? state.shipBuilder.wood
-            : 'Maple';
+            : 'Fenn';
         const metal = METALS.includes(state.shipBuilder?.metal)
             ? state.shipBuilder.metal
             : 'Darkiron';
@@ -7117,7 +7117,7 @@
             ...(build.inventory || {})
         };
 
-        const wood = WOODS.includes(build.wood) ? build.wood : 'Maple';
+        const wood = WOODS.includes(build.wood) ? build.wood : 'Fenn';
         const metal = METALS.includes(build.metal) ? build.metal : 'Darkiron';
 
         const requiredPlanks = positiveNumber(build.planks);
@@ -10653,6 +10653,7 @@
                     source: outputSale.source
                 };
             })
+            .filter(row => Number.isFinite(row.value))
             .sort((a, b) => b.value - a.value)[0] || null;
     }
 
@@ -10665,42 +10666,26 @@
             return gatheringOpportunity(skill);
         }
 
+        /*
+         * Carpentry/smelting/crafting reuse the same net-of-input-cost
+         * profitHour figures the Wood/Metal tabs already compute, rather
+         * than re-deriving from raw sale value (which would double-count
+         * the crafted output as pure profit without subtracting the
+         * log/ore/bar it consumed).
+         */
         if (skill === 'carpentry') {
             return calculateWoodRows()
                 .flatMap(row => [
                     {
                         item: `${row.material} Log → Planks`,
-                        value: goldPerHour(
-                            bestAvailableSaleValue(
-                                findItemPrice([
-                                    `${row.material} Plank`,
-                                    `${row.material} Planks`
-                                ]),
-                                yieldMultiplier('logging') *
-                                    yieldMultiplier('carpentry')
-                            ).value,
-                            yieldMultiplier('logging') *
-                                row.plankChainTime
-                        ),
+                        value: row.plankProfitHour,
                         source:
                             row.plankRecommendation?.source ||
                             'Unavailable'
                     },
                     {
                         item: `${row.material} Planks → Beams`,
-                        value: goldPerHour(
-                            bestAvailableSaleValue(
-                                findItemPrice([
-                                    `${row.material} Beam`,
-                                    `${row.material} Beams`
-                                ]),
-                                yieldMultiplier('logging') *
-                                    (yieldMultiplier('carpentry') / 2) *
-                                    yieldMultiplier('carpentry')
-                            ).value,
-                            yieldMultiplier('logging') *
-                                row.beamChainTime
-                        ),
+                        value: row.beamProfitHour,
                         source:
                             row.beamRecommendation?.source ||
                             'Unavailable'
@@ -10714,18 +10699,7 @@
             return calculateMetalRows()
                 .map(row => ({
                     item: `${row.material} Ore → Bars`,
-                    value: goldPerHour(
-                        bestAvailableSaleValue(
-                            findItemPrice([
-                                `${row.material} Bar`,
-                                `${row.material} Bars`
-                            ]),
-                            yieldMultiplier('mining') *
-                                yieldMultiplier('smelting') / 2
-                        ).value,
-                        yieldMultiplier('mining') *
-                            row.barChainTime
-                    ),
+                    value: row.barProfitHour,
                     source:
                         row.barRecommendation?.source ||
                         'Unavailable'
@@ -10738,20 +10712,7 @@
             return calculateMetalRows()
                 .map(row => ({
                     item: `${row.material} Bar → Nails`,
-                    value: goldPerHour(
-                        bestAvailableSaleValue(
-                            findItemPrice([
-                                `${row.material} Nail`,
-                                `${row.material} Nails`
-                            ]),
-                            yieldMultiplier('mining') *
-                                yieldMultiplier('smelting') / 2 *
-                                4 *
-                                yieldMultiplier('crafting')
-                        ).value,
-                        yieldMultiplier('mining') *
-                            row.nailChainTime
-                    ),
+                    value: row.nailProfitHour,
                     source:
                         row.nailRecommendation?.source ||
                         'Unavailable'
@@ -12619,7 +12580,7 @@
             state.shipBuilder = {
                 selectedShip: 'Custom',
                 name: document.querySelector('#tqm-ship-name')?.value?.trim() || 'Custom Ship',
-                wood: document.querySelector('#tqm-ship-wood')?.value || 'Maple',
+                wood: document.querySelector('#tqm-ship-wood')?.value || 'Fenn',
                 metal: document.querySelector('#tqm-ship-metal')?.value || 'Darkiron',
                 planks: positiveNumber(document.querySelector('#tqm-ship-planks')?.value),
                 beams: positiveNumber(document.querySelector('#tqm-ship-beams')?.value),
