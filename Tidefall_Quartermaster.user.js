@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tidefall Quartermaster
 // @namespace    tidefall-quartermaster
-// @version      1.2.5
+// @version      1.2.6
 // @description  Standalone Exchange reader and mastery-aware profit advisor for Tidefall
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=playtidefall.com
 // @updateURL    https://raw.githubusercontent.com/UserCarl/tidefall-quartermaster/main/Tidefall_Quartermaster.user.js
@@ -13,7 +13,7 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.2.5';
+    const VERSION = '1.2.6';
     const BUILD_ID = '2026-08-17-cargo-weights-xp-planner-sim-mastery';
     const STORAGE_KEY = 'tf-quartermaster-v1';
     const BUTTON_ID = 'tf-quartermaster-button';
@@ -3613,8 +3613,60 @@
             ask: marketNumberFromCell(cells[indexes.ask]),
             bid: marketNumberFromCell(cells[indexes.bid]),
             spread: marketNumberFromCell(cells[indexes.spread]),
-            weeklyVolume: marketNumberFromCell(cells[indexes.weeklyVolume])
+            weeklyVolume: marketNumberFromCell(cells[indexes.weeklyVolume]),
+            trendText: Number.isInteger(map.weeklyTrend)
+                ? String(cells[map.weeklyTrend]?.innerText || '').trim()
+                : '',
+            statusText: Number.isInteger(map.localStatus)
+                ? String(cells[map.localStatus]?.innerText || '').trim()
+                : ''
         };
+    }
+
+    /*
+     * Tidefall's Exchange summary rows carry a `data-mkt-sig` attribute
+     * encoding the same figures shown in the row's cells, plus trend/
+     * supply/history data the visible table doesn't expose a clean cell
+     * for: ask|bid|spread|weeklyVolume|trendDir|trendPct|statusKey|
+     * statusLabel|priceHistoryCSV|unknown|isFavorited
+     */
+    function parseMarketSigAttribute(row) {
+        if (!(row instanceof HTMLElement)) return null;
+
+        const sigElement = row.hasAttribute('data-mkt-sig')
+            ? row
+            : row.querySelector('[data-mkt-sig]');
+        const raw = sigElement?.getAttribute('data-mkt-sig');
+        if (!raw) return null;
+
+        const parts = raw.split('|');
+        if (parts.length < 9) return null;
+
+        const priceHistory = String(parts[8] || '')
+            .split(',')
+            .map(Number)
+            .filter(Number.isFinite);
+
+        return {
+            trendDirection: parts[4] || '',
+            trendPercent: Number(parts[5]),
+            supplyStatusLabel: parts[7] || '',
+            priceHistory,
+            favorited: parts[10] === '1'
+        };
+    }
+
+    function formatTrendLabel(record) {
+        if (!record) return '';
+        if (record.trendDirection && Number.isFinite(record.trendPercent)) {
+            const arrow = record.trendDirection === 'up'
+                ? '▲'
+                : record.trendDirection === 'down'
+                    ? '▼'
+                    : '→';
+            return `${arrow} ${Math.abs(record.trendPercent).toFixed(1)}%`;
+        }
+        return record.trendText || '';
     }
 
     function detectItemId(row) {
@@ -3663,6 +3715,7 @@
             if (!parsed) return;
 
             const existing = state.prices[parsed.name] || {};
+            const sig = parseMarketSigAttribute(row);
 
             state.prices[parsed.name] = {
                 ...existing,
@@ -3677,6 +3730,19 @@
                 bid: parsed.bid,
                 spread: parsed.spread,
                 weeklyVolume: parsed.weeklyVolume,
+
+                trendDirection: sig?.trendDirection || '',
+                trendPercent: sig ? sig.trendPercent : NaN,
+                trendText: parsed.trendText || existing.trendText || '',
+                supplyStatusLabel:
+                    sig?.supplyStatusLabel ||
+                    parsed.statusText ||
+                    existing.supplyStatusLabel ||
+                    '',
+                priceHistory: sig?.priceHistory?.length
+                    ? sig.priceHistory
+                    : existing.priceHistory || [],
+                favorited: sig ? sig.favorited : existing.favorited,
 
                 source:
                     Number(existing.vendorPrice || 0) > 0
@@ -17418,6 +17484,34 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
             ? 'tqm-inspector-positive'
             : 'tqm-inspector-negative';
     }
+    function renderPriceSparkline(history) {
+        const points = Array.isArray(history)
+            ? history.filter(Number.isFinite)
+            : [];
+        if (points.length < 2) return '';
+
+        const width = 96;
+        const height = 24;
+        const min = Math.min(...points);
+        const max = Math.max(...points);
+        const range = max - min || 1;
+
+        const coords = points.map((value, index) => {
+            const x = (index / (points.length - 1)) * width;
+            const y = height - ((value - min) / range) * height;
+            return `${x.toFixed(1)},${y.toFixed(1)}`;
+        }).join(' ');
+
+        const rising = points[points.length - 1] >= points[0];
+        const stroke = rising ? '#7fbf7f' : '#d97a7a';
+
+        return `
+            <svg class="tqm-inspector-sparkline" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none">
+                <polyline points="${coords}" fill="none" stroke="${stroke}" stroke-width="1.5" />
+            </svg>
+        `;
+    }
+
     function buildItemInspectorHtml(itemName) {
         const record = inspectorPriceRecord(itemName);
         const ask = Number(record?.ask || 0);
@@ -17608,6 +17702,25 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
                         <strong class="${freshness.className}">
                             ${escapeHtml(freshness.label)}
                         </strong>
+                    </div>
+                ` : ''}
+
+                ${formatTrendLabel(record) ? `
+                    <div class="tqm-inspector-row">
+                        <span>Weekly trend</span>
+                        <strong>${escapeHtml(formatTrendLabel(record))}</strong>
+                    </div>
+                ` : ''}
+                ${record?.supplyStatusLabel ? `
+                    <div class="tqm-inspector-row">
+                        <span>Local supply</span>
+                        <strong>${escapeHtml(record.supplyStatusLabel)}</strong>
+                    </div>
+                ` : ''}
+                ${record?.priceHistory?.length >= 2 ? `
+                    <div class="tqm-inspector-row">
+                        <span>Price history</span>
+                        ${renderPriceSparkline(record.priceHistory)}
                     </div>
                 ` : ''}
 
@@ -18192,6 +18305,12 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
             font-weight: 800;
             letter-spacing: .12em;
             text-transform: uppercase;
+        }
+
+        #${ITEM_INSPECTOR_ID} .tqm-inspector-sparkline {
+            width: 96px;
+            height: 24px;
+            display: block;
         }
 
         #${ITEM_INSPECTOR_ID} .tqm-inspector-row,
