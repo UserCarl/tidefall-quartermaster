@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tidefall Quartermaster
 // @namespace    tidefall-quartermaster
-// @version      1.2.0
+// @version      1.2.2
 // @description  Standalone Exchange reader and mastery-aware profit advisor for Tidefall
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=playtidefall.com
 // @updateURL    https://raw.githubusercontent.com/UserCarl/tidefall-quartermaster/main/Tidefall_Quartermaster.user.js
@@ -2194,11 +2194,55 @@
         return null;
     }
 
+    /*
+     * Reads the live ship-cargo-capacity chip from the character
+     * summary header: <span class="cs14-chip" data-chip-key="cargo">
+     * Cargo <b>659/2,100</b>...</span>. Read fresh each call instead
+     * of cached, since it's cheap and reflects the current ship
+     * (refits/upgrades) without a stale value lingering after a swap.
+     */
+    function getShipCargoCapacity() {
+        const chip = document.querySelector(
+            '.cs14-chip[data-chip-key="cargo"] b'
+        );
+
+        if (!chip) {
+            return null;
+        }
+
+        const match = String(chip.textContent || '').match(
+            /([\d,]+)\s*\/\s*([\d,]+)/
+        );
+
+        if (!match) {
+            return null;
+        }
+
+        const capacity = Number(match[2].replace(/,/g, ''));
+
+        return Number.isFinite(capacity) && capacity > 0
+            ? capacity
+            : null;
+    }
+
     function weightNote(name) {
         const weight = itemWeight(name);
-        return Number.isFinite(weight)
-            ? `<small class="tqm-weight-note">${weight.toLocaleString(undefined, { maximumFractionDigits: 2 })} wt</small>`
+
+        if (!Number.isFinite(weight)) {
+            return '';
+        }
+
+        const weightText = weight.toLocaleString(undefined, {
+            maximumFractionDigits: 2
+        });
+
+        const cargoCapacity = getShipCargoCapacity();
+
+        const haulText = cargoCapacity
+            ? ` · ${Math.floor(cargoCapacity / weight).toLocaleString()} max haul`
             : '';
+
+        return `<small class="tqm-weight-note">${weightText} wt${haulText}</small>`;
     }
 
     function normalizeMasteryState(savedMastery) {
@@ -10454,8 +10498,8 @@
                 <table class="tqm-table tqm-table-compact">
                     <thead>
                         <tr>
-                            <th>Product</th>
-                            <th>Action</th>
+                            <th class="tqm-product-cell">Product</th>
+                            <th class="tqm-action-cell">Action</th>
                             <th>Profit</th>
                             <th>Profit/hr</th>
                             <th>Sell</th>
@@ -10465,12 +10509,12 @@
                         ${rows.length
                             ? rows.map(row => `
                                 <tr class="${row.locked ? 'tqm-row-locked' : ''}">
-                                    <td>
+                                    <td class="tqm-product-cell">
                                         <strong>${escapeHtml(row.name)}</strong>
                                         <small class="tqm-level-note">Lv. ${row.requiredLevel}${row.locked ? ' · Locked' : ''}</small>
                                         ${weightNote(row.name)}
                                     </td>
-                                    <td>${escapeHtml(recipeActionLabel(row))}</td>
+                                    <td class="tqm-action-cell">${escapeHtml(recipeActionLabel(row))}</td>
                                     <td class="${
                                         Number.isFinite(row.profit)
                                             ? row.profit >= 0
@@ -15317,6 +15361,26 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
         .tqm-processing-layout .tqm-table th:not(:first-child),
         .tqm-processing-layout .tqm-table td:not(:first-child) {
             text-align: right;
+        }
+
+        /*
+         * genericProfitTable()'s Action column shows the full
+         * ingredient list (e.g. "10 Abyssal Nails + 15 Regalwood
+         * Plank -> 1 Master Refit Crate"). With table-layout: fixed
+         * and the shared nowrap rule from .tqm-table, that text was
+         * spilling into the Profit column. Give it more of the
+         * Product column's spare space and let it wrap instead.
+         */
+        .tqm-processing-layout .tqm-table th.tqm-product-cell,
+        .tqm-processing-layout .tqm-table td.tqm-product-cell {
+            width: 22%;
+        }
+
+        .tqm-processing-layout .tqm-table th.tqm-action-cell,
+        .tqm-processing-layout .tqm-table td.tqm-action-cell {
+            width: 34%;
+            text-align: left;
+            white-space: normal;
         }
 
         @media (max-width: 1500px) {
