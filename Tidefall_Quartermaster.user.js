@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tidefall Quartermaster
 // @namespace    tidefall-quartermaster
-// @version      1.1.0
+// @version      1.2.0
 // @description  Standalone Exchange reader and mastery-aware profit advisor for Tidefall
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=playtidefall.com
 // @updateURL    https://raw.githubusercontent.com/UserCarl/tidefall-quartermaster/main/Tidefall_Quartermaster.user.js
@@ -13,8 +13,8 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.1.0';
-    const BUILD_ID = '2026-08-16-wood-rename-mastery-gold-fix';
+    const VERSION = '1.2.0';
+    const BUILD_ID = '2026-08-17-cargo-weights-xp-planner-sim-mastery';
     const STORAGE_KEY = 'tf-quartermaster-v1';
     const BUTTON_ID = 'tf-quartermaster-button';
     const VENDOR_BUTTON_ID = 'tf-quartermaster-vendor-button';
@@ -96,7 +96,8 @@
         progressPlanner: {
             skill: 'smelting',
             itemKey: 'smelting:mithril bar',
-            targetLevel: 40
+            targetLevel: 40,
+            useSimulatedMastery: false
         },
         vendorDebug: {
             status: 'Not scanned',
@@ -199,7 +200,8 @@
             beams: 47,
             nails: 64,
             shipwrightFee: 455,
-            buildTime: '11m 58s'
+            buildTime: '11m 58s',
+            cargo: 308
         },
         Cutter: {
             name: 'Cutter Standard',
@@ -209,7 +211,8 @@
             beams: 400,
             nails: 395,
             shipwrightFee: 3675,
-            buildTime: '1h 36m'
+            buildTime: '1h 36m',
+            cargo: 504
         },
         Sloop: {
             name: 'Sloop Standard',
@@ -219,7 +222,8 @@
             beams: 1000,
             nails: 990,
             shipwrightFee: 9000,
-            buildTime: '4h 2m'
+            buildTime: '4h 2m',
+            cargo: 910
         },
         Brig: {
             name: 'Brig Standard',
@@ -229,7 +233,8 @@
             beams: 2400,
             nails: 2370,
             shipwrightFee: 21800,
-            buildTime: '9h 41m'
+            buildTime: '9h 41m',
+            cargo: 1568
         },
         Brigantine: {
             name: 'Brigantine Standard',
@@ -239,7 +244,8 @@
             beams: 4800,
             nails: 4740,
             shipwrightFee: 43400,
-            buildTime: '19h 22m'
+            buildTime: '19h 22m',
+            cargo: 2100
         },
         Corvette: {
             name: 'Corvette Standard',
@@ -249,7 +255,8 @@
             beams: 8000,
             nails: 8500,
             shipwrightFee: 75000,
-            buildTime: '1d 9h'
+            buildTime: '1d 9h',
+            cargo: 2912
         },
         Frigate: {
             name: 'Frigate Standard',
@@ -259,7 +266,8 @@
             beams: 14000,
             nails: 15750,
             shipwrightFee: 139500,
-            buildTime: '2d 9h'
+            buildTime: '2d 9h',
+            cargo: 3808
         },
         Galleon: {
             name: 'Galleon Standard',
@@ -269,7 +277,8 @@
             beams: 22000,
             nails: 23750,
             shipwrightFee: 214000,
-            buildTime: '3d 22h'
+            buildTime: '3d 22h',
+            cargo: 6300
         },
         'Man-of-War': {
             name: 'Man-of-War Standard',
@@ -279,7 +288,8 @@
             beams: 36000,
             nails: 38500,
             shipwrightFee: 348000,
-            buildTime: '6d 10h'
+            buildTime: '6d 10h',
+            cargo: 7980
         },
         'Ship of the Line': {
             name: 'Ship of the Line Standard',
@@ -289,7 +299,8 @@
             beams: 56000,
             nails: 60000,
             shipwrightFee: 540000,
-            buildTime: '9d 23h'
+            buildTime: '9d 23h',
+            cargo: 11200
         }
     };
 
@@ -2165,6 +2176,29 @@
         return amount > 0
             ? `${Math.round(amount).toLocaleString()} XP/hr`
             : '—';
+    }
+
+    function itemWeight(name) {
+        const key = String(name || '').trim();
+        if (Object.prototype.hasOwnProperty.call(WEIGHT_TABLE, key)) {
+            return WEIGHT_TABLE[key];
+        }
+
+        if (key.endsWith('s')) {
+            const singular = key.slice(0, -1);
+            if (Object.prototype.hasOwnProperty.call(WEIGHT_TABLE, singular)) {
+                return WEIGHT_TABLE[singular];
+            }
+        }
+
+        return null;
+    }
+
+    function weightNote(name) {
+        const weight = itemWeight(name);
+        return Number.isFinite(weight)
+            ? `<small class="tqm-weight-note">${weight.toLocaleString(undefined, { maximumFractionDigits: 2 })} wt</small>`
+            : '';
     }
 
     function normalizeMasteryState(savedMastery) {
@@ -6018,6 +6052,7 @@
                                         <strong>
                                             ${escapeHtml(row.item)}
                                         </strong>
+                                        ${weightNote(row.item)}
                                     </td>
                                     <td>
                                         ${formatSeconds(row.currentCycle)}
@@ -6282,6 +6317,7 @@
                                         <strong>
                                             ${escapeHtml(row.itemName)}
                                         </strong>
+                                        ${weightNote(row.itemName)}
                                     </td>
                                     <td>${formatSeconds(row.cycle)}</td>
                                 </tr>
@@ -7943,6 +7979,19 @@
     }
 
     function renderXpPlanner() {
+        const useSimulatedMastery = Boolean(
+            state.progressPlanner?.useSimulatedMastery
+        );
+
+        return useSimulatedMastery
+            ? withTemporaryMasteryAllocations(
+                masterySimulatorAllocations(),
+                () => renderXpPlannerBody(useSimulatedMastery)
+            )
+            : renderXpPlannerBody(useSimulatedMastery);
+    }
+
+    function renderXpPlannerBody(useSimulatedMastery) {
         const skillOrder = new Map(
             SUPPORTED_XP_SKILLS.map((skill, index) => [skill, index])
         );
@@ -7998,6 +8047,12 @@
                             Quartermaster uses your detected current level and XP
                             progress to calculate actions, time, and materials.
                         </p>
+
+                        <label class="tqm-checkbox-row">
+                            <input id="tqm-progress-use-simulated-mastery" type="checkbox"
+                                ${useSimulatedMastery ? 'checked' : ''}>
+                            <span>Use Mastery Simulator allocations instead of actual mastery</span>
+                        </label>
                     </div>
 
                     <div class="tqm-best-port-badge">
@@ -9616,6 +9671,7 @@
                                             <small class="tqm-level-note">
                                                 Lv. ${row.requiredLevel}${row.locked ? ' · Locked' : ''}
                                             </small>
+                                            ${weightNote(`${row.material} Plank`)}
                                         </td>
                                         <td>Log → Planks</td>
                                         <td title="${escapeHtml(craftProfitTooltip({
@@ -9690,6 +9746,7 @@
                                             <small class="tqm-level-note">
                                                 Lv. ${row.requiredLevel}${row.locked ? ' · Locked' : ''}
                                             </small>
+                                            ${weightNote(`${row.material} Beam`)}
                                         </td>
                                         <td>2 Planks → Beams</td>
                                         <td title="${escapeHtml(craftProfitTooltip({
@@ -10154,6 +10211,7 @@
                                                         <small class="tqm-level-note">
                                                             Lv. ${row.level}${locked ? ' · Locked' : ''}
                                                         </small>
+                                                        ${weightNote(row.item)}
                                                     </td>
                                                     <td>
                                                         ${Number(row.yieldPerAction).toLocaleString(undefined, {
@@ -10333,7 +10391,7 @@
                             <tbody>
                                 ${rows.map(row => `
                                     <tr class="${row.barLocked ? 'tqm-row-locked' : ''}">
-                                        <td><strong>${escapeHtml(`${row.material} Bars`)}</strong></td>
+                                        <td><strong>${escapeHtml(`${row.material} Bars`)}</strong>${weightNote(`${row.material} Bar`)}</td>
                                         <td>${formatCycleSeconds(row.barCycle)}</td>
                                     </tr>
                                 `).join('')}
@@ -10410,6 +10468,7 @@
                                     <td>
                                         <strong>${escapeHtml(row.name)}</strong>
                                         <small class="tqm-level-note">Lv. ${row.requiredLevel}${row.locked ? ' · Locked' : ''}</small>
+                                        ${weightNote(row.name)}
                                     </td>
                                     <td>${escapeHtml(recipeActionLabel(row))}</td>
                                     <td class="${
@@ -10506,6 +10565,7 @@
                                         <td>
                                             <strong>${escapeHtml(row.name)}</strong>
                                             <small class="tqm-level-note">Lv. ${row.requiredLevel}${row.locked ? ' · Locked' : ''}</small>
+                                            ${weightNote(row.name)}
                                         </td>
                                         <td>
                                             1 ${escapeHtml(row.material)} Bar → ${Number(row.outputQuantity).toLocaleString(undefined, {
@@ -12824,6 +12884,18 @@
             }
         );
 
+        document.querySelector('#tqm-progress-use-simulated-mastery')?.addEventListener(
+            'change',
+            event => {
+                state.progressPlanner = {
+                    ...state.progressPlanner,
+                    useSimulatedMastery: Boolean(event.target.checked)
+                };
+                saveState();
+                renderActiveTab('xp');
+            }
+        );
+
         document.querySelector('#tqm-progress-skill')?.addEventListener(
             'change',
             event => {
@@ -13705,8 +13777,8 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
                     <button data-tqm-tab="cooking">Cooking</button>
                     <button data-tqm-tab="crafting">Crafting</button>
                     <button data-tqm-tab="xp">XP Planner</button>
-                    <button data-tqm-tab="planner">Queue Planner</button>
                     <button data-tqm-tab="simulator">Mastery Simulator</button>
+                    <button data-tqm-tab="planner">Queue Planner</button>
                     <button data-tqm-tab="ship">Ship Builder</button>
                     <button data-tqm-tab="history">Net Worth</button>
                     ${state.developerMode
