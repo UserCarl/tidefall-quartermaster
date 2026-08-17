@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tidefall Quartermaster
 // @namespace    tidefall-quartermaster
-// @version      1.2.2
+// @version      1.2.3
 // @description  Standalone Exchange reader and mastery-aware profit advisor for Tidefall
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=playtidefall.com
 // @updateURL    https://raw.githubusercontent.com/UserCarl/tidefall-quartermaster/main/Tidefall_Quartermaster.user.js
@@ -5998,7 +5998,7 @@
                                             Lv. ${row.level}${row.locked ? ' · Locked' : ''}
                                         </small>
                                     </td>
-                                    <td title="${escapeHtml(craftProfitTooltip({
+                                    <td data-tqm-tip="${escapeHtml(craftProfitTooltip({
                                         inputLabel: `1 ${row.ingredient}`,
                                         inputCost: row.ingredientSale?.value,
                                         inputSource: row.ingredientSale?.source,
@@ -6265,7 +6265,7 @@
                                             maximumFractionDigits: 2
                                         })} ${escapeHtml(row.shotType)}
                                     </td>
-                                    <td title="${escapeHtml(craftProfitTooltip({
+                                    <td data-tqm-tip="${escapeHtml(craftProfitTooltip({
                                         inputLabel: `1 ${row.metal} Bar`,
                                         inputCost: row.barOpportunityCost,
                                         inputSource: row.barSale?.source,
@@ -9611,7 +9611,7 @@
             ].filter(Boolean).join('\n');
 
             return `
-                <div class="tqm-rank-row tqm-buy-craft-row" title="${escapeHtml(tooltip)}">
+                <div class="tqm-rank-row tqm-buy-craft-row" data-tqm-tip="${escapeHtml(tooltip)}">
                     <span class="tqm-rank">${index + 1}</span>
                     <span class="tqm-rank-name">
                         <strong>${escapeHtml(item.item)}</strong>
@@ -9718,7 +9718,7 @@
                                             ${weightNote(`${row.material} Plank`)}
                                         </td>
                                         <td>Log → Planks</td>
-                                        <td title="${escapeHtml(craftProfitTooltip({
+                                        <td data-tqm-tip="${escapeHtml(craftProfitTooltip({
                                             inputLabel: `1 ${row.material} Log`,
                                             inputCost: row.plankInputCost,
                                             outputLabel: `${row.material} Planks`,
@@ -9793,7 +9793,7 @@
                                             ${weightNote(`${row.material} Beam`)}
                                         </td>
                                         <td>2 Planks → Beams</td>
-                                        <td title="${escapeHtml(craftProfitTooltip({
+                                        <td data-tqm-tip="${escapeHtml(craftProfitTooltip({
                                             inputLabel: `2 ${row.material} Planks`,
                                             inputCost: row.beamInputCost,
                                             outputLabel: `${row.material} Beams`,
@@ -9977,7 +9977,7 @@
                                                     : 'Bars'
                                             }
                                         </td>
-                                        <td title="${escapeHtml(craftProfitTooltip({
+                                        <td data-tqm-tip="${escapeHtml(craftProfitTooltip({
                                             inputLabel: `2 ${row.material} Ore`,
                                             inputCost: row.barActionInputCost,
                                             inputSource: row.barActionInput?.source,
@@ -10054,7 +10054,7 @@
                                                 maximumFractionDigits: 2
                                             })} Nails
                                         </td>
-                                        <td title="${escapeHtml(craftProfitTooltip({
+                                        <td data-tqm-tip="${escapeHtml(craftProfitTooltip({
                                             inputLabel: `1 ${row.material} Bar`,
                                             inputCost: row.nailActionInputCost,
                                             inputSource: row.nailActionInput?.source,
@@ -10359,7 +10359,7 @@
                                                 maximumFractionDigits: 2
                                             })} ${smeltingYield === 1 ? 'Bar' : 'Bars'}
                                         </td>
-                                        <td title="${escapeHtml(craftProfitTooltip({
+                                        <td data-tqm-tip="${escapeHtml(craftProfitTooltip({
                                             inputLabel: `2 ${row.material} Ore`,
                                             inputCost: row.barActionInputCost,
                                             inputSource: row.barActionInput?.source,
@@ -14562,6 +14562,72 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
             gap: 12px;
         }
 
+        .tqm-hover-tooltip {
+            position: fixed;
+            top: -9999px;
+            left: -9999px;
+            z-index: 2147483647;
+            width: max-content;
+            max-width: min(320px, calc(100vw - 24px));
+            padding: 10px 12px;
+            color: #f2eee4;
+            background: #17191c;
+            border: 1px solid rgba(197, 160, 89, .42);
+            border-radius: 7px;
+            box-shadow:
+                0 18px 55px rgba(0, 0, 0, .56),
+                inset 0 1px 0 rgba(255, 255, 255, .025);
+            font-family: var(--font-body, "Gothic A1", sans-serif);
+            font-size: 12px;
+            line-height: 1.4;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity .1s ease;
+        }
+
+        .tqm-hover-tooltip--visible {
+            opacity: 1;
+        }
+
+        .tqm-hover-tooltip__header {
+            margin: 0 0 7px;
+            padding-bottom: 6px;
+            color: var(--gold, #c5a059);
+            border-bottom: 1px solid rgba(197, 160, 89, .22);
+            font-family: var(--font-heading, Georgia, serif);
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: .06em;
+            text-transform: uppercase;
+        }
+
+        .tqm-hover-tooltip__rows {
+            display: grid;
+            gap: 4px;
+        }
+
+        .tqm-hover-tooltip__row {
+            display: flex;
+            align-items: baseline;
+            justify-content: space-between;
+            gap: 14px;
+        }
+
+        .tqm-hover-tooltip__row--full {
+            display: block;
+        }
+
+        .tqm-hover-tooltip__row-label {
+            color: rgba(232, 224, 208, .6);
+            white-space: nowrap;
+        }
+
+        .tqm-hover-tooltip__row-value {
+            color: #f2eee4;
+            font-weight: 700;
+            text-align: right;
+        }
+
         .tqm-floating-inventory {
             position: fixed;
             z-index: 2147483646;
@@ -18537,6 +18603,121 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
             NET_WORTH_SNAPSHOT_INTERVAL_MS
         );
     }, 5000);
+
+    // =========================================================
+    // HOVER TOOLTIP
+    // =========================================================
+    //
+    // Profit-breakdown tooltips (craftProfitTooltip() etc.) used to sit
+    // on a plain browser title= attribute -- slow to appear and styled
+    // by the OS, not the game. Tidefall's own item tooltip
+    // (.inv-slot-tooltip) is a proper floating panel with a header and
+    // label/value rows, so this replaces title= with a styled panel of
+    // our own in the same spirit. Any element rendered with
+    // data-tqm-tip="Label: value\nLabel: value" (same format
+    // craftProfitTooltip() already returns) gets one automatically via
+    // delegation -- no per-table wiring needed.
+
+    let hoverTooltipEl = null;
+    let hoverTooltipTarget = null;
+
+    function ensureHoverTooltip() {
+        if (hoverTooltipEl) return hoverTooltipEl;
+
+        hoverTooltipEl = document.createElement('div');
+        hoverTooltipEl.className = 'tqm-hover-tooltip';
+        hoverTooltipEl.setAttribute('role', 'tooltip');
+        document.body.appendChild(hoverTooltipEl);
+        return hoverTooltipEl;
+    }
+
+    function renderHoverTooltipRows(text) {
+        return text
+            .split('\n')
+            .map(line => line.trim())
+            .filter(Boolean)
+            .map(line => {
+                const splitAt = line.indexOf(': ');
+
+                if (splitAt === -1) {
+                    return `
+                        <div class="tqm-hover-tooltip__row tqm-hover-tooltip__row--full">
+                            ${escapeHtml(line)}
+                        </div>
+                    `;
+                }
+
+                return `
+                    <div class="tqm-hover-tooltip__row">
+                        <span class="tqm-hover-tooltip__row-label">${escapeHtml(line.slice(0, splitAt))}</span>
+                        <span class="tqm-hover-tooltip__row-value">${escapeHtml(line.slice(splitAt + 2))}</span>
+                    </div>
+                `;
+            })
+            .join('');
+    }
+
+    function positionHoverTooltip(target) {
+        if (!hoverTooltipEl) return;
+
+        const rect = target.getBoundingClientRect();
+        const tipRect = hoverTooltipEl.getBoundingClientRect();
+        const margin = 8;
+
+        let top = rect.top - tipRect.height - margin;
+        let placedBelow = false;
+
+        if (top < margin) {
+            top = rect.bottom + margin;
+            placedBelow = true;
+        }
+
+        let left = rect.left + (rect.width / 2) - (tipRect.width / 2);
+        left = Math.max(
+            margin,
+            Math.min(left, window.innerWidth - tipRect.width - margin)
+        );
+
+        hoverTooltipEl.style.top = `${Math.round(top)}px`;
+        hoverTooltipEl.style.left = `${Math.round(left)}px`;
+        hoverTooltipEl.classList.toggle('tqm-hover-tooltip--below', placedBelow);
+    }
+
+    function showHoverTooltip(target) {
+        const raw = target.getAttribute('data-tqm-tip');
+        if (!raw) return;
+
+        hoverTooltipTarget = target;
+
+        const el = ensureHoverTooltip();
+        el.innerHTML = `
+            <div class="tqm-hover-tooltip__header">Breakdown</div>
+            <div class="tqm-hover-tooltip__rows">${renderHoverTooltipRows(raw)}</div>
+        `;
+        el.classList.add('tqm-hover-tooltip--visible');
+        positionHoverTooltip(target);
+    }
+
+    function hideHoverTooltip() {
+        hoverTooltipTarget = null;
+        if (hoverTooltipEl) hoverTooltipEl.classList.remove('tqm-hover-tooltip--visible');
+    }
+
+    document.addEventListener('mouseover', event => {
+        const target = event.target.closest('[data-tqm-tip]');
+        if (!target || target === hoverTooltipTarget) return;
+        showHoverTooltip(target);
+    });
+
+    document.addEventListener('mouseout', event => {
+        const target = event.target.closest('[data-tqm-tip]');
+        if (!target) return;
+        if (event.relatedTarget && target.contains(event.relatedTarget)) return;
+        hideHoverTooltip();
+    });
+
+    document.addEventListener('scroll', hideHoverTooltip, true);
+    window.addEventListener('blur', hideHoverTooltip);
 
     console.info(
         `[Tidefall Quartermaster] Loaded v${VERSION} (${BUILD_ID})`
