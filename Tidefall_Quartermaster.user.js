@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Tidefall Quartermaster
 // @namespace    tidefall-quartermaster
-// @version      1.2.3
+// @version      1.2.5
 // @description  Standalone Exchange reader and mastery-aware profit advisor for Tidefall
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=playtidefall.com
 // @updateURL    https://raw.githubusercontent.com/UserCarl/tidefall-quartermaster/main/Tidefall_Quartermaster.user.js
@@ -13,7 +13,7 @@
 (function () {
     'use strict';
 
-    const VERSION = '1.2.0';
+    const VERSION = '1.2.5';
     const BUILD_ID = '2026-08-17-cargo-weights-xp-planner-sim-mastery';
     const STORAGE_KEY = 'tf-quartermaster-v1';
     const BUTTON_ID = 'tf-quartermaster-button';
@@ -17990,6 +17990,64 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
         inspector.style.left = `${Math.max(margin, left)}px`;
         inspector.style.top = `${Math.max(margin, top)}px`;
     }
+
+    /*
+     * Tidefall's own item tooltip (.inv-slot-tooltip) opens near the same
+     * hovered slot the inspector does, and both anchor near the cursor --
+     * moving the inspector to dodge it fought with the "stay put once
+     * opened so you can click it to pin" behavior above and made pinning
+     * unreliable. Suppressing the native tooltip while the inspector is
+     * open avoids the overlap without touching the inspector's position
+     * at all.
+     */
+    let suppressedNativeTooltip = null;
+
+    function syncNativeTooltipSuppression() {
+        const inspector = document.getElementById(ITEM_INSPECTOR_ID);
+        const inspectorVisible = Boolean(
+            inspector && inspector.style.display === 'block'
+        );
+
+        const nativeTooltip = inspectorVisible
+            ? document.querySelector('.inv-slot-tooltip.inv-slot-tooltip--open')
+            : null;
+
+        if (
+            suppressedNativeTooltip &&
+            suppressedNativeTooltip !== nativeTooltip
+        ) {
+            suppressedNativeTooltip.style.removeProperty('visibility');
+            suppressedNativeTooltip = null;
+        }
+
+        if (nativeTooltip) {
+            // Guard the write: this observer also watches style= changes,
+            // so an unconditional setProperty here would re-trigger itself
+            // every time (this call's own mutation counts) forever. Only
+            // write when the value would actually change.
+            if (
+                nativeTooltip.style.getPropertyValue('visibility') !==
+                'hidden'
+            ) {
+                nativeTooltip.style.setProperty(
+                    'visibility',
+                    'hidden',
+                    'important'
+                );
+            }
+            suppressedNativeTooltip = nativeTooltip;
+        }
+    }
+
+    new MutationObserver(syncNativeTooltipSuppression).observe(
+        document.body,
+        {
+            childList: true,
+            subtree: true,
+            attributes: true,
+            attributeFilter: ['class', 'style']
+        }
+    );
     function renderItemInspector(
         itemName,
         preservePosition = false
@@ -18015,6 +18073,7 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
             'tqm-item-inspector-pinned',
             itemInspectorPinned
         );
+        syncNativeTooltipSuppression();
 
         if (
             preservePosition &&
@@ -18036,6 +18095,7 @@ document.querySelector('#tqm-read-mastery')?.addEventListener('click', () => {
         const inspector = document.getElementById(ITEM_INSPECTOR_ID);
         if (inspector) inspector.style.display = 'none';
         if (!itemInspectorPinned) itemInspectorItemName = '';
+        syncNativeTooltipSuppression();
     }
 
     const itemInspectorStyle = document.createElement('style');
